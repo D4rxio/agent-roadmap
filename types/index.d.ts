@@ -1,4 +1,4 @@
-export type RoadmapStatus = 'todo' | 'running' | 'done' | 'failed' | 'blocked' | 'awaiting'
+export type RoadmapStatus = 'todo' | 'running' | 'done' | 'failed' | 'blocked' | 'awaiting' | 'skipped'
 
 export type RoadmapPriority = 'P0' | 'P1' | 'P2' | 'P3'
 
@@ -12,6 +12,12 @@ export type RoadmapPlanStep = {
   checkpoint?: boolean
   /** Step ids (same track) or `<track>/<id>` that must be done first. */
   blockedBy?: string[]
+  /** Why this step exists: the problem it solves. */
+  why?: string
+  /** Its boundaries: what is in, and what must not be touched. */
+  scope?: string
+  /** How to tell it is finished: the done criteria. */
+  doneWhen?: string
 }
 
 /** One line of the shared journal: each is its own file, so sessions never overwrite each other. */
@@ -34,6 +40,8 @@ export type RoadmapEvent =
       status: RoadmapStatus
       note?: string
       evidence?: string
+      /** Why a step is skipped: required with `skipped`. */
+      reason?: string
       origin?: RoadmapOrigin
       actor?: string
     }
@@ -94,6 +102,8 @@ export type RoadmapLive = {
   track?: string
   /** What the main loop does now: its last tool call, shortened. */
   activity?: string
+  /** The item this chat holds: `<track>/<id>` (or a bare track). */
+  focus?: string
   at: number
   agents: { agentId: string; activity?: string; tools: number }[]
 }
@@ -116,6 +126,16 @@ export type RoadmapStep = {
   agents: string[]
   /** Set on a step the person added; an agent may refine it, the mark stays. */
   addedBy?: 'you'
+  /** Why it was skipped (with `skipped`, or with `awaiting` when a worker proposes a skip). */
+  skipReason?: string
+  /** What an `awaiting` step waits for the person to confirm. */
+  proposed?: 'done' | 'skipped'
+  /** Why this step exists: the problem it solves. */
+  why?: string
+  /** Its boundaries: what is in, and what must not be touched. */
+  scope?: string
+  /** How to tell it is finished: the done criteria. */
+  doneWhen?: string
   priority?: RoadmapPriority
   /** Set aside: kept with its status, left out of the track's progress until restored. */
   backlog: boolean
@@ -145,6 +165,8 @@ export type RoadmapSession = {
   lastAt: number
   isLive: boolean
   activity?: string
+  /** The item this live chat holds, `<track>/<id>`. */
+  focus?: string
 }
 
 export type RoadmapAgent = {
@@ -174,6 +196,8 @@ declare module 'claude-code' {
   interface PluginState {
     roadmap: {
       board: RoadmapBoard
+      window: RoadmapWindow
+      collapsed: string[]
       view: 'tracks' | 'days'
       expanded: string[]
       paneOpen: boolean
@@ -181,6 +205,8 @@ declare module 'claude-code' {
       tz: number
       /** `<track>/<id>` of the step whose title is being edited, or ''. */
       editing: string
+      /** The item this chat holds, `<track>/<id>`, or ''. */
+      focus: string
     }
   }
 }

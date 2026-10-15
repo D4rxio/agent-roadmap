@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { YOUR_PHASE, dayLabel, dayOf, days, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -103,9 +103,11 @@ test('sessions share one board through the journal; an agent ticks its step', as
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ text: /API v2/ })).toBeDefined()
     expect(await ui.find({ text: /1\/2/ })).toBeDefined()
-    expect(await ui.find({ text: /Map endpoints/ })).toBe(undefined)
-    await ui.press({ key: 'fold-api' })
+    // The agent tagged #api/1.1, so this chat holds it: its track starts open.
+    expect(await ui.find({ text: /This chat/ })).toBeDefined()
     expect(await ui.find({ text: /Map endpoints/ })).toBeDefined()
+    await ui.press({ key: 'fold-api' })
+    expect(await ui.find({ text: /Map endpoints/ })).toBe(undefined)
     await ui.press({ key: 'fold-api' })
     await ui.press({ key: 'view-days' })
     expect(await ui.find({ text: /Today/ })).toBeDefined()
@@ -334,19 +336,21 @@ test('from the pane: add an item, click its icon through the states, rename it, 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'fold-api' })
   await ui.input({ key: 'add-api', text: 'test on iPad' })
-  expect(await ui.find({ text: /u1 {2}test on iPad/ })).toBeDefined()
+  const added = await ui.find({ text: /u\w{5} {2}test on iPad/ })
+  expect(added).toBeDefined()
+  const uid = /(u\w{5}) {2}test/.exec(added?.text ?? '')?.[1] ?? ''
   expect(await ui.find({ text: /✎ you/ })).toBeDefined()
 
-  await ui.press({ key: 'cycle-api/u1' })
+  await ui.press({ key: `cycle-api/${uid}` })
   expect(await ui.find({ text: /running|for / })).toBeDefined()
-  await ui.press({ key: 'cycle-api/u1' })
+  await ui.press({ key: `cycle-api/${uid}` })
   expect(await ui.find({ text: /33%/ })).toBeDefined()
 
-  await ui.press({ key: 'rename-api/u1' })
-  await ui.input({ key: 'edit-api/u1', text: 'iPad + iPhone' })
-  expect(await ui.find({ text: /u1 {2}iPad \+ iPhone/ })).toBeDefined()
+  await ui.press({ key: `rename-api/${uid}` })
+  await ui.input({ key: `edit-api/${uid}`, text: 'iPad + iPhone' })
+  expect(await ui.find({ text: new RegExp(`${uid} {2}iPad \\+ iPhone`) })).toBeDefined()
 
-  await ui.press({ key: 'remove-api/u1' })
+  await ui.press({ key: `remove-api/${uid}` })
   expect(await ui.find({ text: /iPad/ })).toBe(undefined)
   expect(await ui.find({ text: /0%/ })).toBeDefined()
   await ui.unmount()
@@ -539,4 +543,372 @@ test('from the pane: a track goes to the backlog tab and is restored from there'
     await ui.press({ key: 'tprio-api' })
     await ui.unmount()
   }
+})
+
+test('a dependency loop is found across tracks; a brief tells why, scope, done-when and what waits', async () => {
+  const lay = (track: string, steps: object[], at = 1000) =>
+    ({ kind: 'plan', at, session: 's', track, phases: [{ name: 'P', steps }] }) as RoadmapEvent
+  const ok = fold([lay('a', [{ id: '1', title: 'A1' }, { id: '2', title: 'A2', blockedBy: ['1'] }])], [], 9000)
+  expect(findCycle(ok.tracks)).toBe(undefined)
+  const loop = fold(
+    [
+      lay('a', [{ id: '1', title: 'A1', blockedBy: ['b/1'] }]),
+      lay('b', [{ id: '1', title: 'B1', blockedBy: ['a/1'] }]),
+    ],
+    [],
+    9000,
+  )
+  expect(findCycle(loop.tracks)?.join(' → ')).toBe('a/1 → b/1 → a/1')
+
+  const b = fold(
+    [
+      lay('a', [
+        { id: '1', title: 'Schema', why: 'clients need one shape', scope: 'no DB changes', doneWhen: 'contract tests green' },
+        { id: '2', title: 'Client', blockedBy: ['1'] },
+      ]),
+    ],
+    [],
+    9000,
+  )
+  const text = brief(b, 'a', '1') ?? ''
+  expect(text).toContain('Why: clients need one shape')
+  expect(text).toContain('Scope: no DB changes')
+  expect(text).toContain('Done when: contract tests green')
+  expect(text).toContain('Unblocks:')
+  expect(text).toContain('a/2 Client')
+  expect(brief(b, 'a', '2') ?? '').toContain('Waits on:')
+  expect(brief(b, 'a', '2') ?? '').toContain('Done when: (not written')
+})
+
+test('roadmap plan refuses a loop; roadmap step reads the brief; roadmap done reports and files follow-ups', async ($, on) => {
+  const files = new Map<string, string>()
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-eight' }))
+  on('store.get', () => ({ value: undefined }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const looped = await $.tool.call({
+    tool: 'mcp__roadmap__plan',
+    track: 'web',
+    phases: [{ name: 'Build', steps: [{ id: '1', title: 'A', blocked_by: ['2'] }, { id: '2', title: 'B', blocked_by: ['1'] }] }],
+  })
+  expect(String(looped.result)).toContain('Not laid out')
+  expect([...files.keys()].filter(p => p.includes('/events/')).length).toBe(0)
+
+  await $.tool.call({
+    tool: 'mcp__roadmap__plan',
+    track: 'web',
+    phases: [
+      {
+        name: 'Build',
+        steps: [
+          { id: '1', title: 'Login page', why: 'users cannot sign in', scope: 'no API changes', done_when: 'e2e login passes' },
+          { id: '2', title: 'Ship', checkpoint: true, blocked_by: ['1'] },
+        ],
+      },
+    ],
+  })
+  const read1 = await $.tool.call({ tool: 'mcp__roadmap__step', step: 'web/1' })
+  expect(String(read1.result)).toContain('Done when: e2e login passes')
+
+  const closed = await $.tool.call({
+    tool: 'mcp__roadmap__done',
+    step: 'web/1',
+    shipped: 'login page with remember-me',
+    evidence: 'e2e 12/12',
+    follow_ups: [{ title: 'Rate-limit login', priority: 'P1' }, { title: 'Password reset' }],
+  })
+  expect(String(closed.result)).toContain('web/1 → done')
+  const f1 = /web\/(f\w{5}) Rate-limit login/.exec(String(closed.result))?.[1]
+  const f2 = /web\/(f\w{5}) Password reset/.exec(String(closed.result))?.[1]
+  expect(f1).toBeDefined()
+  expect(f2).toBeDefined()
+  expect(f1).not.toBe(f2)
+
+  const shipped = await $.tool.call({ tool: 'mcp__roadmap__done', step: 'web/2', shipped: 'released' })
+  expect(String(shipped.result)).toContain('awaiting')
+
+  // Follow-ups: in their own phase, in the backlog, with the proposed priority; a re-lay keeps them.
+  await $.tool.call({
+    tool: 'mcp__roadmap__plan',
+    track: 'web',
+    phases: [{ name: 'Build', steps: [{ id: '1', title: 'Login page' }, { id: '2', title: 'Ship', checkpoint: true }] }],
+  })
+  const status = String((await $.tool.call({ tool: 'mcp__roadmap__step', step: `web/${f1}` })).result)
+  expect(status).toContain(`phase: ${FOLLOW_UPS}`)
+  expect(status).toContain('priority P1')
+  expect(status).toContain('IN BACKLOG')
+})
+
+test('old loose events are archived into one bundle and deleted; the roadmap reads the same', async ($, on) => {
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  const removed: string[] = []
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, { text: e.text, mtimeMs: Date.now() })
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path)?.text ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({
+      name,
+      kind: 'file' as const,
+      size: 1,
+      mtimeMs: files.get(`${e.path}/${name}`)?.mtimeMs ?? 0,
+      isLink: false,
+    })),
+  }))
+  on('process.run', (_$, e) => {
+    const argv = e.argv as readonly string[]
+    if (argv[0] === 'rm') for (const path of argv.slice(3)) if (files.delete(path)) removed.push(path)
+    return { value: { exitCode: argv[0] === 'rm' ? 0 : 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-nine' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+
+  const dir = '/home/t/.claude/roadmap'
+  const old = Date.now() - 3 * 86_400_000
+  const put = (at: number, ev: object, tag: string) =>
+    files.set(`${dir}/events/${at}-${tag}.json`, { text: JSON.stringify({ ...ev, at }), mtimeMs: at })
+  put(old, { ...PLAN }, 'plan')
+  for (let i = 1; i <= 250; i++) {
+    put(old + i, { kind: 'step', session: 's', track: 'api', id: i % 2 ? '1.1' : '1.2', status: i === 250 ? 'done' : 'running' }, `s${i}`)
+  }
+  // Two fresh events stay loose.
+  put(Date.now() - 1000, { kind: 'step', session: 's', track: 'api', id: '1.1', status: 'done' }, 'fresh1')
+  put(Date.now() - 500, { kind: 'session', session: 's', title: 'fresh' }, 'fresh2')
+
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const bundles = under(`${dir}/archive`)
+  expect(bundles.length).toBe(1)
+  const lines = (files.get(`${dir}/archive/${bundles[0]}`)?.text ?? '').trim().split('\n')
+  expect(lines.length).toBe(252)
+  expect(JSON.parse(lines[0] ?? '{}')).toEqual({ bundle: 1, count: 251 })
+  expect(removed.length).toBe(251)
+  expect(under(`${dir}/events`).length).toBe(2)
+
+  // The roadmap reads the same from the bundle plus the two loose files.
+  const read = String((await $.tool.call({ tool: 'mcp__roadmap__status' })).result)
+  expect(read).toContain('2/2 done')
+})
+
+test('each chat holds its item: the pane leads with it, others see who holds what, a brief warns', async ($, on) => {
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, { text: e.text, mtimeMs: Date.now() })
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path)?.text ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: files.get(`${e.path}/${name}`)?.mtimeMs ?? 0, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-ten' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  const dir = '/home/t/.claude/roadmap'
+  files.set(`${dir}/events/1000-o-x.json`, { text: JSON.stringify(PLAN), mtimeMs: 1000 })
+  // Another chat, live now, holds api/1.2.
+  files.set(`${dir}/live/other.json`, {
+    text: JSON.stringify({ session: 'other', title: 'empty-trash fix', at: Date.now(), agents: [], focus: 'api/1.2' }),
+    mtimeMs: Date.now(),
+  })
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  // This chat reads 1.1's brief: it now holds 1.1.
+  await $.tool.call({ tool: 'mcp__roadmap__step', step: 'api/1.1' })
+  const warned = String((await $.tool.call({ tool: 'mcp__roadmap__step', step: 'api/1.2' })).result)
+  expect(warned).toContain('Another chat holds this step right now: "empty-trash fix"')
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /This chat/ })).toBeDefined()
+    expect(await ui.find({ text: /● empty-trash fix/ })).toBeDefined()
+    expect(await ui.find({ text: /● this chat/ })).toBeDefined()
+    expect(await ui.find({ text: /api\/1\.1 {2}Map endpoints/ })).toBeDefined()
+    await ui.press({ key: 'pin-api/1.2' })
+    expect(await ui.find({ text: /api\/1\.2 {2}Pagination/ })).toBeDefined()
+    await ui.press({ key: 'unpin' })
+    expect(await ui.find({ text: /This chat/ })).toBe(undefined)
+    await ui.press({ key: 'pin-api/1.1' })
+    expect(await ui.find({ text: /api\/1\.1 {2}Map endpoints/ })).toBeDefined()
+    await ui.unmount()
+  }
+  // The heartbeat tells the other chats.
+  const mine = JSON.parse(files.get(`${dir}/live/session-ten.json`)?.text ?? '{}')
+  expect(mine.focus).toBe('api/1.1')
+})
+
+test('two chats adding at once cannot collide on an id', async () => {
+  const b = fold([PLAN], [], 9000)
+  const t = b.tracks[0]!
+  // Two chats drawing at the same moment, many times over: never the same id.
+  for (let i = 0; i < 5000; i++) expect(nextId(t, [], 'f')).not.toBe(nextId(t, [], 'f'))
+  const ids = new Set(Array.from({ length: 50 }, () => nextId(t, [], 'f')))
+  expect([...ids].every(id => /^f[0-9a-z]{5}$/.test(id))).toBe(true)
+  // Existing ids are never reused.
+  expect(t.steps.some(s => ids.has(s.id))).toBe(false)
+})
+
+test('a bundle read while it is still being written is read again until complete', async ($, on) => {
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, { text: e.text, mtimeMs: Date.now() })
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path)?.text ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-eleven' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  const dir = '/home/t/.claude/roadmap'
+  const rows = [
+    { n: '1-a-x.json', e: { ...PLAN, at: 1 } },
+    { n: '2-a-x.json', e: { kind: 'step', at: 2, session: 's', track: 'api', id: '1.1', status: 'done' } },
+    { n: '3-a-x.json', e: { kind: 'step', at: 3, session: 's', track: 'api', id: '1.2', status: 'done' } },
+  ]
+  const write = (count: number) =>
+    files.set(`${dir}/archive/1-a-x.jsonl`, {
+      text: [JSON.stringify({ bundle: 1, count: 3 }), ...rows.slice(0, count).map(r => JSON.stringify(r))].join('\n'),
+      mtimeMs: 0,
+    })
+  write(2) // caught mid-write: the last event is not in yet
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  expect(String((await $.tool.call({ tool: 'mcp__roadmap__status' })).result)).toContain('1/2 done')
+  write(3) // the writer finished; the loose files are already gone
+  expect(String((await $.tool.call({ tool: 'mcp__roadmap__status' })).result)).toContain('2/2 done')
+})
+
+test('skipped: the person decides it with a reason, it leaves progress and unblocks; an agent only proposes', async () => {
+  const plan = {
+    kind: 'plan',
+    at: 1,
+    session: 's',
+    track: 'web',
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Legacy export' }, { id: '2', title: 'New export', blockedBy: ['1'] }, { id: '3', title: 'Docs' }] }],
+  } as RoadmapEvent
+  const step = (at: number, id: string, status: string, origin: 'person' | 'agent', reason?: string) =>
+    ({ kind: 'step', at, session: origin, track: 'web', id, status, reason, origin }) as RoadmapEvent
+  const get = (events: RoadmapEvent[], id: string) => fold(events, [], 9000).tracks[0]?.steps.find(x => x.id === id)
+
+  // The person skips 1: skipped with its reason, out of progress, and 2 is no longer blocked by it.
+  const skipped = [plan, step(2, '1', 'skipped', 'person', 'nobody uses it')]
+  expect(get(skipped, '1')?.status).toBe('skipped')
+  expect(get(skipped, '1')?.skipReason).toBe('nobody uses it')
+  expect(get(skipped, '2')?.status).toBe('todo')
+  expect(get([plan], '2')?.status).toBe('blocked')
+  const t = fold(skipped, [], 9000).tracks[0]!
+  expect(progress(t)).toEqual({ done: 0, total: 2 })
+  expect(summary(fold(skipped, [], 9000))).toContain('skipped (decided not to do): web/1 — nobody uses it')
+
+  // An agent's skip is a proposal: awaiting, with its reason, and still blocking its dependents.
+  const proposed = [plan, step(2, '1', 'skipped', 'agent', 'superseded by 2')]
+  expect(get(proposed, '1')?.status).toBe('awaiting')
+  expect(get(proposed, '1')?.proposed).toBe('skipped')
+  expect(get(proposed, '1')?.skipReason).toBe('superseded by 2')
+  expect(get(proposed, '2')?.status).toBe('blocked')
+  // Confirmed by the person (with the reason carried): skipped. Rejected: back to todo.
+  expect(get([...proposed, step(3, '1', 'skipped', 'person', 'superseded by 2')], '1')?.status).toBe('skipped')
+  expect(get([...proposed, step(3, '1', 'todo', 'person')], '1')?.status).toBe('todo')
+  // A done proposal on a checkpoint still reads as a done proposal.
+  const cp = { ...plan, phases: [{ name: 'P', steps: [{ id: '1', title: 'Ship', checkpoint: true }] }] } as RoadmapEvent
+  expect(get([cp, step(2, '1', 'done', 'agent')], '1')?.proposed).toBe('done')
+})
+
+test('from the tool and the pane: a skip needs a reason; the person confirms a proposed skip or skips directly', async ($, on) => {
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(PLAN)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-twelve' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const noReason = await $.tool.call({ tool: 'mcp__roadmap__mark', step: 'api/1.1', status: 'skipped' })
+  expect(String(noReason.result)).toContain('A skip needs a reason')
+  const proposed = await $.tool.call({ tool: 'mcp__roadmap__mark', step: 'api/1.1', status: 'skipped', reason: 'covered by 1.2' })
+  expect(String(proposed.result)).toContain('skip proposed')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /proposes skipping: covered by 1\.2/ })).toBeDefined()
+  await ui.press({ key: 'ok-api-1.1' })
+  expect(await ui.find({ text: /proposes skipping/ })).toBe(undefined)
+  await ui.press({ key: 'fold-api' })
+  expect(await ui.find({ text: /skipped: covered by 1\.2/ })).toBeDefined()
+  expect(await ui.find({ text: /0\/1/ })).toBeDefined()
+
+  // The person skips 1.2 directly, with a reason typed in the row.
+  await ui.press({ key: 'skipit-api/1.2' })
+  await ui.input({ key: 'skip-api/1.2', text: 'out of scope this quarter' })
+  expect(await ui.find({ text: /skipped: out of scope this quarter/ })).toBeDefined()
+  // Clicking a skipped step's icon brings it back.
+  await ui.press({ key: 'cycle-api/1.2' })
+  expect(await ui.find({ text: /skipped: out of scope/ })).toBe(undefined)
+  await ui.unmount()
 })

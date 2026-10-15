@@ -20,8 +20,12 @@ import {
   refInText,
   slug,
   summary,
+  FOLLOW_UPS,
   PRIORITIES,
   boardMarkdown,
+  brief,
+  findCycle,
+  nextId,
   nextPersonId,
   trackMarkdown,
 } from './model'
@@ -32,6 +36,8 @@ const PANE = 'roadmap'
 const TOOL_PLAN = 'mcp__roadmap__plan'
 const TOOL_MARK = 'mcp__roadmap__mark'
 const TOOL_STATUS = 'mcp__roadmap__status'
+const TOOL_STEP = 'mcp__roadmap__step'
+const TOOL_DONE = 'mcp__roadmap__done'
 const EMPTY: RoadmapBoard = { tracks: [], sessions: [], agents: [], at: 0 }
 
 const board = atom({ plugin: 'roadmap', key: 'board' } as const, EMPTY)
@@ -41,6 +47,7 @@ const paneOpen = atom({ plugin: 'roadmap', key: 'paneOpen' } as const, false)
 const showBand = atom({ plugin: 'roadmap', key: 'band' } as const, true)
 const tzOffset = atom({ plugin: 'roadmap', key: 'tz' } as const, 0)
 const editing = atom({ plugin: 'roadmap', key: 'editing' } as const, '')
+const focus = atom({ plugin: 'roadmap', key: 'focus' } as const, '')
 
 // The module's own memory of the shared journal; a reload re-reads it from disk.
 const journal = {
@@ -48,11 +55,20 @@ const journal = {
   me: '',
   title: '',
   track: undefined as string | undefined,
+  /** The item this chat holds, `<track>/<id>`, shared through the heartbeat. */
+  focus: undefined as string | undefined,
   activity: undefined as string | undefined,
   activeAt: 0,
   isOpened: false,
+  /** Every event read, by its name (a loose file's name, or the name it had before it was archived). */
   seen: new Set<string>(),
   events: [] as RoadmapEvent[],
+  /** Loose files present in `events/` at the last look, name → event: what compaction may archive. */
+  loose: new Map<string, RoadmapEvent>(),
+  bundles: new Set<string>(),
+  lastFold: 0,
+  /** What our own heartbeat last said, to tell a real change from a rewrite. */
+  lastLive: '',
   lives: new Map<string, { mtimeMs: number; live: RoadmapLive }>(),
   agents: new Map<string, { activity?: string; tools: number }>(),
 }
@@ -81,6 +97,7 @@ function parse<T>(text: string): T | undefined {
 }
 
 async function republish($: EngineInterface) {
+  journal.lastFold = Date.now()
   const next = fold(journal.events, [...journal.lives.values()].map(l => l.live), Date.now())
   await update($, board, () => next)
   const live = next.sessions.filter(s => s.isLive).length
@@ -103,24 +120,124 @@ async function republish($: EngineInterface) {
   )
 }
 
-/** Reads what other sessions wrote since the last look. */
-async function sync($: EngineInterface) {
+/** Archive bundles: written once by a compaction, never changed after, read once per session. */
+const ARCHIVE = 'archive'
+/** Loose events older than this, when there are more than COMPACT_MIN of them, go into a bundle. */
+const COMPACT_AGE_MS = 24 * 3_600_000
+const COMPACT_MIN = 200
+/** A heartbeat file this old belongs to a session that is long gone. */
+const LIVE_PRUNE_MS = 7 * 86_400_000
+
+function atOf(name: string): number {
+  return Number(name.slice(0, name.indexOf('-'))) || 0
+}
+
+function take(name: string, ev: RoadmapEvent | undefined): boolean {
+  if (!ev || typeof ev.at !== 'number' || typeof ev.kind !== 'string' || journal.seen.has(name)) return false
+  journal.seen.add(name)
+  journal.events.push(ev)
+  return true
+}
+
+/** Reads what other sessions wrote since the last look; says whether anything changed. */
+async function sync($: EngineInterface): Promise<boolean> {
+  let changed = false
+  const archiveDir = `${journal.dir}/${ARCHIVE}`
+  if (await $.fs.exists(archiveDir)) {
+    for (const entry of await $.fs.list(archiveDir)) {
+      if (entry.kind !== 'file' || !entry.name.endsWith('.jsonl') || journal.bundles.has(entry.name)) continue
+      // A bundle read while it is still being written is taken in part and read again next time,
+      // until its header's count is met: a partial read never marks it done.
+      let expected: number | undefined
+      let rows = 0
+      for (const line of (await $.fs.read(`${archiveDir}/${entry.name}`)).split('\n')) {
+        const row = line.trim() ? parse<{ n?: string; e?: RoadmapEvent; count?: number }>(line) : undefined
+        if (!row) continue
+        if (typeof row.count === 'number' && row.n === undefined) {
+          expected = row.count
+          continue
+        }
+        rows++
+        if (row.n && take(row.n, row.e)) changed = true
+      }
+      if (expected === undefined || rows >= expected) journal.bundles.add(entry.name)
+    }
+  }
   const eventsDir = `${journal.dir}/events`
   if (await $.fs.exists(eventsDir)) {
+    const present = new Set<string>()
     for (const entry of await $.fs.list(eventsDir)) {
-      if (entry.kind !== 'file' || !entry.name.endsWith('.json') || journal.seen.has(entry.name)) continue
-      journal.seen.add(entry.name)
+      if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+      present.add(entry.name)
+      if (journal.loose.has(entry.name)) continue
+      // Already read from a bundle (a compaction is deleting it right now): not loose any more.
+      if (journal.seen.has(entry.name)) continue
       const ev = parse<RoadmapEvent>(await $.fs.read(`${eventsDir}/${entry.name}`))
-      if (ev && typeof ev.at === 'number' && typeof ev.kind === 'string') journal.events.push(ev)
+      if (take(entry.name, ev) && ev) {
+        journal.loose.set(entry.name, ev)
+        changed = true
+      }
     }
+    for (const name of [...journal.loose.keys()]) if (!present.has(name)) journal.loose.delete(name)
   }
   const liveDir = `${journal.dir}/live`
   if (await $.fs.exists(liveDir)) {
     for (const entry of await $.fs.list(liveDir)) {
       if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+      // Our own heartbeat is already in memory: rereading it would count as a change every tick.
+      if (entry.name === `${journal.me}.json`) continue
       if (journal.lives.get(entry.name)?.mtimeMs === entry.mtimeMs) continue
       const live = parse<RoadmapLive>(await $.fs.read(`${liveDir}/${entry.name}`))
-      if (live && typeof live.at === 'number') journal.lives.set(entry.name, { mtimeMs: entry.mtimeMs, live })
+      if (live && typeof live.at === 'number') {
+        journal.lives.set(entry.name, { mtimeMs: entry.mtimeMs, live })
+        changed = true
+      }
+    }
+  }
+  return changed
+}
+
+/** Deletes files by path, a batch at a time: `rm` where there is one, `del` on Windows. */
+async function remove($: EngineInterface, paths: string[]): Promise<void> {
+  for (let i = 0; i < paths.length; i += 200) {
+    const batch = paths.slice(i, i + 200)
+    const out = await $.process.run(['rm', '-f', '--', ...batch]).catch(() => undefined)
+    if (out?.exitCode === 0) continue
+    await $.process.run(['cmd', '/c', 'del', '/q', ...batch.map(x => x.replace(/\//g, '\\'))]).catch(() => undefined)
+  }
+}
+
+/**
+ * Moves old loose events into one new archive bundle, then deletes them. The bundle is written, read
+ * back and counted before anything is deleted; events keep their names, so a reader that sees one in
+ * both places, or two sessions compacting at once, still counts it once.
+ */
+async function compact($: EngineInterface): Promise<void> {
+  const cutoff = Date.now() - COMPACT_AGE_MS
+  const old = [...journal.loose].filter(([name]) => atOf(name) < cutoff).sort((a, b) => atOf(a[0]) - atOf(b[0]))
+  if (old.length < COMPACT_MIN) return
+  const archiveDir = `${journal.dir}/${ARCHIVE}`
+  // Another session compacted a moment ago: leave it to that one.
+  if (await $.fs.exists(archiveDir)) {
+    const recent = (await $.fs.list(archiveDir)).some(x => Date.now() - x.mtimeMs < 10 * 60_000)
+    if (recent) return
+  }
+  const name = `${atOf(old[0]?.[0] ?? '')}-${journal.me.slice(0, 8)}-${rand()}.jsonl`
+  const path = `${archiveDir}/${name}`
+  const header = JSON.stringify({ bundle: 1, count: old.length })
+  await $.fs.write(path, [header, ...old.map(([n, e]) => JSON.stringify({ n, e }))].join('\n') + '\n')
+  const back = (await $.fs.read(path)).split('\n').filter(line => line.trim() && parse(line)).length
+  if (back !== old.length + 1) return
+  journal.bundles.add(name)
+  await remove($, old.map(([n]) => `${journal.dir}/events/${n}`))
+  for (const [n] of old) journal.loose.delete(n)
+  // Heartbeats of sessions gone for a week say nothing any more.
+  const liveDir = `${journal.dir}/live`
+  if (await $.fs.exists(liveDir)) {
+    const stale = (await $.fs.list(liveDir)).filter(x => x.kind === 'file' && Date.now() - x.mtimeMs > LIVE_PRUNE_MS)
+    if (stale.length) {
+      await remove($, stale.map(x => `${liveDir}/${x.name}`))
+      for (const x of stale) journal.lives.delete(x.name)
     }
   }
 }
@@ -130,25 +247,31 @@ async function emit($: EngineInterface, ev: RoadmapEvent) {
   const name = `${ev.at}-${journal.me.slice(0, 8)}-${rand()}.json`
   journal.seen.add(name)
   journal.events.push(ev)
+  journal.loose.set(name, ev)
   await $.fs.write(`${journal.dir}/events/${name}`, JSON.stringify(ev))
   await republish($)
 }
 
 /** This session's live file: what it and its agents do right now. */
-async function heartbeat($: EngineInterface, force = false) {
+async function heartbeat($: EngineInterface, force = false): Promise<boolean> {
   const now = Date.now()
   const busy = now - journal.activeAt < LIVE_MS || journal.agents.size > 0
-  if (!busy && !force) return
+  if (!busy && !force) return false
   const live: RoadmapLive = {
     session: journal.me,
     title: journal.title,
     track: journal.track,
     activity: journal.activity,
+    focus: journal.focus,
     at: force && !busy ? now - LIVE_MS : now,
     agents: [...journal.agents].map(([agentId, a]) => ({ agentId, ...a })),
   }
   await $.fs.write(`${journal.dir}/live/${journal.me}.json`, JSON.stringify(live))
   journal.lives.set(`${journal.me}.json`, { mtimeMs: now, live })
+  const said = JSON.stringify([live.title, live.track, live.activity, live.agents])
+  const isNew = said !== journal.lastLive
+  journal.lastLive = said
+  return isNew
 }
 
 async function endAgent($: EngineInterface, agentId: string, status: RoadmapStatus) {
@@ -207,9 +330,28 @@ async function personStatus($: EngineInterface, track: string, id: string, statu
   await emit($, { kind: 'step', at: Date.now(), session: journal.me, track, id, status, origin: 'person', actor: 'person' })
 }
 
+/** This chat takes hold of an item: shown at the top of its pane, its track opened, others see who holds it. */
+async function setFocus($: EngineInterface, ref: string) {
+  if (journal.focus === ref) return
+  journal.focus = ref || undefined
+  journal.track = ref ? ref.split('/')[0] : journal.track
+  journal.activeAt = Date.now()
+  await update($, focus, () => ref)
+  const track = ref.split('/')[0]
+  if (track) await update($, expanded, list => (list.includes(track) ? list : [...list, track]))
+  await heartbeat($)
+}
+
 async function decide($: EngineInterface, track: string, id: string, status: RoadmapStatus) {
   await emit($, { kind: 'step', at: Date.now(), session: journal.me, track, id, status, origin: 'person', actor: 'person' })
-  $.ui.toast(`${status === 'done' ? '✓' : '✗'} ${track}/${id} ${status === 'done' ? 'confirmed' : 'rejected'}`)
+  $.ui.toast(`${status === 'done' ? '✓' : '✗'} ${track}/${id} ${status === 'done' ? 'confirmed' : status === 'todo' ? 'back to work' : 'rejected'}`)
+}
+
+/** The person skips a step (or confirms a worker's proposed skip): a decision with its reason. */
+async function personSkip($: EngineInterface, track: string, id: string, reason: string) {
+  if (!reason.trim()) return
+  await emit($, { kind: 'step', at: Date.now(), session: journal.me, track, id, status: 'skipped', reason: reason.trim(), origin: 'person', actor: 'person' })
+  $.ui.toast(`↷ ${track}/${id} skipped`)
 }
 
 export const register: Register = on => {
@@ -236,7 +378,9 @@ export const register: Register = on => {
         'sessions: phases, each with steps. Re-laying a track keeps step statuses for the same ids. Step ids are ' +
         'short ("1.1"); the full reference is "<track>/<id>". Put "#<track>/<id>" in an Agent call\'s ' +
         'description (e.g. "#api/2.1 Map the endpoints") and the step ticks off with a green check when ' +
-        'the agent finishes. Mark steps the person must sign off as checkpoint, and dependencies as blocked_by. ' +
+        'the agent finishes. Mark steps the person must sign off as checkpoint, and dependencies as blocked_by ' +
+        '(a plan that closes a dependency loop is refused). Give each step a why, a scope and done_when where ' +
+        'you can: the agent that picks it up reads them with roadmap step. ' +
         'Steps the person added are marked "added by the person": keep them when you re-lay a track (you may ' +
         'refine their titles or move them into a phase; they are never lost even if you leave them out). ' +
         'Read the roadmap with the status tool first; never re-lay a track you were not asked to.',
@@ -267,6 +411,9 @@ export const register: Register = on => {
                         items: { type: 'string' },
                         description: 'Step ids that must be done first ("1.2", or "<track>/<id>").',
                       },
+                      why: { type: 'string', description: 'The problem this step solves, in a sentence.' },
+                      scope: { type: 'string', description: 'Its boundaries: what is in, and what must not be touched.' },
+                      done_when: { type: 'string', description: 'How to tell it is finished: concrete done criteria.' },
                     },
                     required: ['id', 'title'],
                   },
@@ -290,7 +437,8 @@ export const register: Register = on => {
         '("#<track>/<id>" in the Agent description) report themselves. You may also propose `priority` ' +
         '(P0 most urgent … P3, or "none") or `backlog` (true sets a step aside, false brings it back); the ' +
         'person\'s own choice of either always stands over yours. `step` "<track>/*" sets them for a whole ' +
-        'track. Never work on a backlog step or track unless asked.',
+        'track. Never work on a backlog step or track unless asked. Status "skipped" (with a short `reason`) ' +
+        'proposes leaving a step out — not blocked, not failed, just not going to be done; the person confirms it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -298,10 +446,50 @@ export const register: Register = on => {
           status: { type: 'string', enum: STATUSES.filter(x => x !== 'awaiting') },
           priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3', 'none'] },
           backlog: { type: 'boolean' },
+          reason: { type: 'string', description: 'Required with status "skipped": why the step will not be done.' },
           evidence: { type: 'string', description: 'What shows it: tests passed, commit, PR, measurement.' },
           note: { type: 'string', description: 'A few words: blocker, next step.' },
         },
         required: ['step'],
+      },
+    })
+    await $.tool.register({
+      name: 'step',
+      isDeferred: false,
+      description:
+        'Read one roadmap step\'s brief before you work on it: why it exists, its scope (what not to touch), ' +
+        'when it counts as done, what it waits on and what it unblocks, its priority and backlog state. ' +
+        '`step` is "<track>/<id>".',
+      inputSchema: { type: 'object', properties: { step: { type: 'string' } }, required: ['step'] },
+    })
+    await $.tool.register({
+      name: 'done',
+      isDeferred: false,
+      description:
+        'Close your work on a roadmap step with a structured report: what shipped, the evidence, and ' +
+        'follow-ups. The step is marked done (a checkpoint waits for the person\'s confirmation); each ' +
+        'follow-up becomes a new step in the track\'s "Follow-ups" phase, set aside in the backlog so the ' +
+        'person decides when it is worked on. Use status "failed" if it did not work out.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          step: { type: 'string', description: '"<track>/<id>"' },
+          shipped: { type: 'string', description: 'What was delivered, in a sentence or two.' },
+          evidence: { type: 'string', description: 'What shows it: tests, commit, PR, measurement.' },
+          status: { type: 'string', enum: ['done', 'failed'] },
+          follow_ups: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+              },
+              required: ['title'],
+            },
+          },
+        },
+        required: ['step', 'shipped'],
       },
     })
     await $.tool.register({
@@ -314,11 +502,15 @@ export const register: Register = on => {
 
     await sync($).catch(() => undefined)
     await republish($)
+    // Only when there is a backlog of old loose files; a no-op otherwise.
+    await compact($).catch(() => undefined)
 
     $.clock.every(3000, () => {
       void (async () => {
-        await sync($)
-        await heartbeat($)
+        // Both run every tick: `||` would skip the heartbeat whenever something else changed.
+        const synced = await sync($)
+        const beat = await heartbeat($)
+        const changed = synced || beat
         const mine = [...journal.agents.keys()]
         if (mine.length > 0) {
           const live = await $.agent.list()
@@ -328,7 +520,8 @@ export const register: Register = on => {
             else if (seen?.status === 'failed' || seen?.status === 'killed') await endAgent($, id, 'failed')
           }
         }
-        await republish($)
+        // Fold again only when something changed; every 30 s regardless, for "5m ago" and live expiry.
+        if (changed || Date.now() - journal.lastFold > 30_000) await republish($)
       })().catch(() => undefined)
     })
 
@@ -350,8 +543,8 @@ export const register: Register = on => {
     const text =
       'A roadmap shared by all Claude sessions on this machine is shown to the person in the Roadmap pane.\n' +
       summary(now) +
-      '\nIf this task is one of these steps: mark it running when you start and done with evidence when ' +
-      'finished (roadmap mark), and put "#<track>/<id>" in each Agent description for that step. Checkpoints ' +
+      '\nIf this task is one of these steps: read its brief first (roadmap step), mark it running when you ' +
+      'start, and close it with roadmap done (what shipped, evidence, follow-ups); put "#<track>/<id>" in each Agent description for that step. Checkpoints ' +
       'are closed by the person, not by you. Open steps are listed most important first (P0 … P3); ' +
       'backlog steps are set aside — do not work on them unless asked. New work → add a step with roadmap plan (read roadmap status first).'
     return { ...ran, blocks: [...ran.blocks, { name: 'roadmap', text }] }
@@ -412,19 +605,30 @@ export const register: Register = on => {
       name: String(p.name ?? ''),
       steps: (Array.isArray(p.steps) ? (p.steps as { id?: unknown; title?: unknown }[]) : [])
         .map(s => {
-          const raw = s as { checkpoint?: unknown; blocked_by?: unknown; blockedBy?: unknown }
+          const raw = s as {
+            checkpoint?: unknown
+            blocked_by?: unknown
+            blockedBy?: unknown
+            why?: unknown
+            scope?: unknown
+            done_when?: unknown
+            doneWhen?: unknown
+          }
           const deps = raw.blocked_by ?? raw.blockedBy
+          const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
           return {
             id: String(s.id ?? '').trim(),
             title: String(s.title ?? s.id ?? ''),
             checkpoint: raw.checkpoint === true ? true : undefined,
             blockedBy: Array.isArray(deps) && deps.length ? deps.map(String) : undefined,
+            why: text(raw.why),
+            scope: text(raw.scope),
+            doneWhen: text(raw.done_when ?? raw.doneWhen),
           }
         })
         .filter(s => s.id && !ids.has(s.id) && ids.add(s.id)),
     }))
-    journal.track = track
-    await emit($, {
+    const planned: RoadmapEvent = {
       kind: 'plan',
       at: Date.now(),
       session: journal.me,
@@ -432,9 +636,21 @@ export const register: Register = on => {
       title: e.title === undefined ? undefined : String(e.title),
       phases,
       actor: 'claude',
-    })
+    }
+    // Refuse a layout whose dependencies close a loop: nothing in it could ever start.
+    await sync($).catch(() => undefined)
+    const would = fold([...journal.events, planned], [], Date.now())
+    const loop = findCycle(would.tracks)
+    if (loop) {
+      return { result: `Not laid out: blocked_by closes a loop, so none of these could ever start: ${loop.join(' → ')}. Break one link and lay the track out again.` }
+    }
+    const known = new Set(would.tracks.flatMap(t => t.steps.map(x => `${t.name}/${x.id}`)))
+    const dangling = [...new Set(would.tracks.find(t => t.name === track)?.steps.flatMap(x => x.blockedBy.filter(r => !known.has(r))) ?? [])]
+    journal.track = track
+    await emit($, planned)
     void openPane($).catch(() => undefined)
-    return { result: `Track "${track}" laid out: ${phases.length} phases, ${ids.size} steps.` }
+    const warn = dangling.length ? ` Note: blocked_by names steps that do not exist (yet): ${dangling.join(', ')}.` : ''
+    return { result: `Track "${track}" laid out: ${phases.length} phases, ${ids.size} steps.${warn}` }
   })
 
   on('tool.call', { tool: TOOL_MARK }, async ($, e) => {
@@ -446,6 +662,10 @@ export const register: Register = on => {
     if (e.status !== undefined && !status) return { result: `Unknown status; use one of ${STATUSES.join(', ')}.` }
     if (!status && priority === undefined && backlog === undefined) {
       return { result: 'Give a status, a priority (P0…P3 or none) or backlog (true/false).' }
+    }
+    const reason = typeof e.reason === 'string' && e.reason.trim() ? e.reason.trim() : undefined
+    if (status === 'skipped' && !reason) {
+      return { result: 'A skip needs a reason: why will this step not be done? Pass `reason`.' }
     }
     await sync($).catch(() => undefined)
     const now = fold(journal.events, [], Date.now())
@@ -474,6 +694,7 @@ export const register: Register = on => {
       const kept = t && t.triagedBy === 'you' ? ' (the person\'s own choice stands)' : ''
       return { result: `${ref.track}/${ref.id}: priority ${t?.priority ?? 'none'}, ${t?.backlog ? 'in backlog' : 'active'}${kept}.` }
     }
+    if (status === 'running') await setFocus($, `${ref.track}/${ref.id}`)
     await emit($, {
       kind: 'step',
       at: Date.now(),
@@ -483,6 +704,7 @@ export const register: Register = on => {
       status,
       note: e.note === undefined ? undefined : String(e.note),
       evidence: e.evidence === undefined ? undefined : String(e.evidence),
+      reason,
       origin: 'agent',
       actor: 'claude',
     })
@@ -491,10 +713,71 @@ export const register: Register = on => {
     if (after?.status === 'awaiting') $.ui.toast(`◆ ${ref.track}/${ref.id} awaits your confirmation`)
     return {
       result:
-        after?.status === 'awaiting'
+        after?.status === 'awaiting' && after.proposed === 'skipped'
+          ? `${ref.track}/${ref.id} → skip proposed; the person confirms or rejects it in the Roadmap pane.`
+          : after?.status === 'awaiting'
           ? `${ref.track}/${ref.id} → awaiting the person's confirmation (checkpoint or reopened after failure).`
           : `${ref.track}/${ref.id} → ${after?.status ?? status}.`,
     }
+  })
+
+  on('tool.call', { tool: TOOL_STEP }, async ($, e) => {
+    await sync($).catch(() => undefined)
+    const now = fold(journal.events, [], Date.now())
+    const ref = parseRef(String(e.step ?? ''), now.tracks, journal.track)
+    const live = fold(journal.events, [...journal.lives.values()].map(l => l.live), Date.now())
+    const text = ref && brief(live, ref.track, ref.id, journal.me)
+    if (!ref || !text) return { result: `No step "${String(e.step)}". Known:\n${summary(now, { open: 50 })}` }
+    // Reading a brief takes hold only when this chat holds nothing yet: looking up a dependency
+    // must not move the chat off its own item. Starting, finishing or pinning moves it.
+    if (!journal.focus) await setFocus($, `${ref.track}/${ref.id}`)
+    return { result: text }
+  })
+
+  on('tool.call', { tool: TOOL_DONE }, async ($, e) => {
+    await sync($).catch(() => undefined)
+    const now = fold(journal.events, [], Date.now())
+    const ref = parseRef(String(e.step ?? ''), now.tracks, journal.track)
+    const track = ref && now.tracks.find(t => t.name === ref.track)
+    if (!ref || !track?.steps.some(s => s.id === ref.id)) {
+      return { result: `No step "${String(e.step)}". Known:\n${summary(now, { open: 50 })}` }
+    }
+    const status: RoadmapStatus = e.status === 'failed' ? 'failed' : 'done'
+    const shipped = String(e.shipped ?? '').trim()
+    await setFocus($, `${ref.track}/${ref.id}`)
+    await emit($, {
+      kind: 'step',
+      at: Date.now(),
+      session: journal.me,
+      track: ref.track,
+      id: ref.id,
+      status,
+      note: shipped || undefined,
+      evidence: e.evidence === undefined ? undefined : String(e.evidence),
+      origin: 'agent',
+      actor: 'claude',
+    })
+    const raw = Array.isArray(e.follow_ups) ? (e.follow_ups as { title?: unknown; priority?: unknown }[]) : []
+    const added: string[] = []
+    for (const f of raw) {
+      const title = String(f.title ?? '').trim()
+      if (!title) continue
+      const fresh = fold(journal.events, [], Date.now()).tracks.find(t => t.name === ref.track)
+      if (!fresh) break
+      const id = nextId(fresh, journal.events, 'f')
+      const at = Date.now()
+      await emit($, { kind: 'add', at, session: journal.me, track: ref.track, id, title, phase: FOLLOW_UPS, origin: 'agent' })
+      const priority = PRIORITIES.includes(f.priority as RoadmapPriority) ? (f.priority as RoadmapPriority) : undefined
+      await emit($, { kind: 'triage', at: at + 1, session: journal.me, track: ref.track, id, backlog: true, priority, origin: 'agent' })
+      added.push(`${ref.track}/${id} ${title}`)
+    }
+    const after = (await read($, board)).tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+    if (after?.status === 'done') $.ui.toast(`✓ ${ref.track}/${ref.id}`)
+    if (after?.status === 'awaiting') $.ui.toast(`◆ ${ref.track}/${ref.id} awaits your confirmation`)
+    const state =
+      after?.status === 'awaiting' ? 'awaiting the person\'s confirmation (checkpoint or reopened after failure)' : (after?.status ?? status)
+    const ups = added.length ? `\nFollow-ups set aside in the backlog for the person to schedule:\n${added.map(x => `- ${x}`).join('\n')}` : ''
+    return { result: `${ref.track}/${ref.id} → ${state}.${ups}` }
   })
 
   on('tool.call', { tool: TOOL_STATUS }, async $ => {
@@ -525,7 +808,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (!('agentId' in ran) || !ran.agentId) return ran
     const ref = refInText(e.description ?? '', (await read($, board)).tracks, journal.track)
-    if (ref) journal.track = ref.track
+    if (ref) await setFocus($, `${ref.track}/${ref.id}`)
     journal.agents.set(ran.agentId, { tools: 0 })
     await emit($, {
       kind: 'agent',
@@ -581,6 +864,9 @@ export const register: Register = on => {
         })(),
       onDecide: (track, id, status) => void decide($, track, id, status),
       editing: await read($, editing),
+      focus: await read($, focus),
+      onPin: ref => void setFocus($, ref),
+      onSkip: (track, id, reason) => void personSkip($, track, id, reason),
       onCycle: (track, id, status) => void personStatus($, track, id, status),
       onAdd: (track, title) => void personAdd($, track, title),
       onStartEdit: ref => void update($, editing, () => ref),
@@ -603,6 +889,7 @@ export const register: Register = on => {
       isOpen: await read($, paneOpen),
       cols: e.props.bodyColumns,
       onToggle: () => void togglePane($),
+      focus: await read($, focus),
     })
   })
 }

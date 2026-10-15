@@ -31,6 +31,40 @@ export type PaneData = {
   onBacklog: (track: string, id: string, backlog: boolean) => void
   onTrackPriority: (track: string, priority: RoadmapPriority | null) => void
   onTrackBacklog: (track: string, backlog: boolean) => void
+  /** The item this chat holds, `<track>/<id>`, or ''. */
+  focus: string
+  onPin: (ref: string) => void
+  /** The person skips a step, with the reason they gave. */
+  onSkip: (track: string, id: string, reason: string) => void
+}
+
+function shortTitle(text: string, max = 22): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+/** "This chat: ◐ api/2.4 One error format": the item this chat holds, first thing in its pane. */
+function thisChat(els: Els, d: PaneData) {
+  const { Box, Text, Button } = els
+  if (!d.focus) return null
+  const [track, id] = [d.focus.split('/')[0] ?? '', d.focus.split('/').slice(1).join('/')]
+  const t = d.board.tracks.find(x => x.name === track)
+  const s = t?.steps.find(x => x.id === id)
+  return (
+    <Box key="this-chat" flexDirection="row" gap={1} marginBottom={1}>
+      <Text color="warning" bold>
+        This chat
+      </Text>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end">
+          {s ? <Text color={COLOR[s.status]}>{`${ICONS[s.status]} `}</Text> : null}
+          {s ? `${d.focus}  ${s.title}` : t ? t.title : d.focus}
+        </Text>
+      </Box>
+      <Button key="unpin" plain onPress={() => d.onPin('')}>
+        <Text dimColor>Unpin</Text>
+      </Button>
+    </Box>
+  )
 }
 
 /** A click on the priority chip raises it: none → P3 → P2 → P1 → P0 → none. */
@@ -55,6 +89,7 @@ function prioChip(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
 export function nextStatus(status: RoadmapStatus): RoadmapStatus {
   if (status === 'todo' || status === 'blocked' || status === 'failed') return 'running'
   if (status === 'running' || status === 'awaiting') return 'done'
+  // done and skipped both go back to todo: a skip is undone by the same click.
   return 'todo'
 }
 
@@ -65,6 +100,7 @@ const COLOR: Record<RoadmapStatus, string> = {
   failed: 'error',
   blocked: 'subtle',
   awaiting: 'permission',
+  skipped: 'subtle',
 }
 
 // Mid-tone fills that read on both a light and a dark page.
@@ -75,6 +111,7 @@ const FILL: Record<RoadmapStatus, string> = {
   blocked: 'url(#blocked)',
   failed: '#e5534b',
   todo: 'rgba(128,128,128,0.22)',
+  skipped: 'rgba(128,128,128,0.22)',
 }
 
 const ORDER: RoadmapStatus[] = ['done', 'awaiting', 'running', 'blocked', 'failed', 'todo']
@@ -127,7 +164,8 @@ function stepRight(s: RoadmapStep, d: PaneData): string {
   if (s.status === 'blocked') return `waits on ${s.blockedBy.join(', ')}`
   if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
-  if (s.status === 'awaiting') return 'to confirm'
+  if (s.status === 'awaiting') return s.proposed === 'skipped' ? 'skip to confirm' : 'to confirm'
+  if (s.status === 'skipped') return `skipped: ${s.skipReason ?? 'no reason'}`
   if (s.status === 'failed') return s.endedAt ? `failed ${when(s.endedAt, d.now, d.tz)}` : 'failed'
   return ''
 }
@@ -218,15 +256,28 @@ function needsYou(els: Els, d: PaneData) {
             <Text color="permission">◆ </Text>
             {`${titleOf(st.track)} · ${st.id} ${st.title}`}
           </Text>
-          {st.evidence || st.lastBy ? (
+          {st.proposed === 'skipped' ? (
+            <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
+          ) : st.evidence || st.lastBy ? (
             <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}`}</Text>
           ) : null}
           <Box flexDirection="row" gap={1} marginTop={0}>
             <Text>{'  '}</Text>
-            <Button key={`ok-${st.track}-${st.id}`} variant="primary" onPress={() => d.onDecide(st.track, st.id, 'done')}>
-              Confirm ✓
+            <Button
+              key={`ok-${st.track}-${st.id}`}
+              variant="primary"
+              onPress={() =>
+                st.proposed === 'skipped'
+                  ? d.onSkip(st.track, st.id, st.skipReason ?? '')
+                  : d.onDecide(st.track, st.id, 'done')
+              }
+            >
+              {st.proposed === 'skipped' ? 'Confirm skip' : 'Confirm ✓'}
             </Button>
-            <Button key={`no-${st.track}-${st.id}`} onPress={() => d.onDecide(st.track, st.id, 'failed')}>
+            <Button
+              key={`no-${st.track}-${st.id}`}
+              onPress={() => d.onDecide(st.track, st.id, st.proposed === 'skipped' ? 'todo' : 'failed')}
+            >
               Reject
             </Button>
           </Box>
@@ -334,6 +385,27 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
 function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
   const { Box, Text, Button, Input } = els
   const ref = `${t.name}/${s.id}`
+  if (d.editing === `skip:${ref}` && Input) {
+    return (
+      <Box key={`step-${ref}`} flexDirection="row" gap={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Input
+            key={`skip-${ref}`}
+            placeholder={`Why skip ${s.id}? Enter to skip`}
+            value=""
+            autoFocus
+            onSubmit={(value: string) => {
+              if (value.trim()) d.onSkip(t.name, s.id, value.trim())
+              d.onStartEdit('')
+            }}
+          />
+        </Box>
+        <Button key={`cancel-skip-${ref}`} plain onPress={() => d.onStartEdit('')}>
+          Cancel
+        </Button>
+      </Box>
+    )
+  }
   if (d.editing === ref && Input) {
     return (
       <Box key={`step-${ref}`} flexDirection="row" gap={1}>
@@ -362,9 +434,15 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       </Button>
       {prioChip(els, d, t, s)}
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text wrap="truncate-end" dimColor={s.status === 'done' || s.backlog}>
-          {`${s.id}  ${s.title}`}
+        <Text wrap="truncate-end" dimColor={s.status === 'done' || s.status === 'skipped' || s.backlog}>
+          <Text strikethrough={s.status === 'skipped'}>{`${s.id}  ${s.title}`}</Text>
           {s.addedBy ? <Text color="suggestion">{'  ✎ you'}</Text> : null}
+          {d.focus === ref ? <Text color="warning">{'  ● this chat'}</Text> : null}
+          {d.board.sessions
+            .filter(x => x.isLive && x.focus === ref && x.id !== d.me)
+            .map(x => (
+              <Text key={`held-${ref}-${x.id}`} color="subtle">{`  ● ${shortTitle(x.title)}`}</Text>
+            ))}
         </Text>
       </Box>
       {right ? (
@@ -388,6 +466,16 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
         display={d.canDraw ? 'none' : 'flex'}
         hover={d.canDraw ? { display: 'flex' } : undefined}
       >
+        {d.focus !== ref ? (
+          <Button key={`pin-${ref}`} plain onPress={() => d.onPin(ref)}>
+            <Text dimColor>Pin</Text>
+          </Button>
+        ) : null}
+        {s.status !== 'skipped' && s.status !== 'done' && els.Input ? (
+          <Button key={`skipit-${ref}`} plain onPress={() => d.onStartEdit(`skip:${ref}`)}>
+            <Text dimColor>Skip</Text>
+          </Button>
+        ) : null}
         {!s.backlog ? (
           <Button key={`shelve-${ref}`} plain onPress={() => d.onBacklog(t.name, s.id, true)}>
             <Text dimColor>Backlog</Text>
@@ -448,6 +536,7 @@ const KIND: Record<string, { icon: string; color: string }> = {
   done: { icon: '✓', color: 'success' },
   failed: { icon: '✗', color: 'error' },
   awaiting: { icon: '◆', color: 'permission' },
+  skipped: { icon: '↷', color: 'subtle' },
   started: { icon: '◐', color: 'warning' },
   session: { icon: '●', color: 'subtle' },
   agent: { icon: '◇', color: 'subtle' },
@@ -547,21 +636,30 @@ export function drawPane(els: Els, d: PaneData) {
   return (
     <Box flexDirection="column">
       {header(els, d)}
+      {thisChat(els, d)}
       {needsYou(els, d)}
       {d.view === 'days'
         ? daysView(els, d)
         : d.view === 'backlog'
           ? backlogView(els, d)
-          : d.board.tracks.filter(t => !t.backlog).map(t => trackCard(els, d, t))}
+          : d.board.tracks
+              .filter(t => !t.backlog)
+              .sort((a, b) => Number(b.name === d.focus.split('/')[0]) - Number(a.name === d.focus.split('/')[0]))
+              .map(t => trackCard(els, d, t))}
       {d.view === 'tracks' ? liveSection(els, d) : null}
     </Box>
   )
 }
 
 /** One line above the prompt: the tracks at a glance and the pane's toggle. */
-export function drawBand(els: Els, d: { board: RoadmapBoard; isOpen: boolean; cols: number; onToggle: () => void }) {
+export function drawBand(
+  els: Els,
+  d: { board: RoadmapBoard; isOpen: boolean; cols: number; onToggle: () => void; focus?: string },
+) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
+  const [ft, ...fid] = (d.focus ?? '').split('/')
+  const held = d.focus ? d.board.tracks.find(t => t.name === ft)?.steps.find(s => s.id === fid.join('/')) : undefined
   const tracks = d.board.tracks
     .filter(t => !t.backlog)
     .map(t => {
@@ -575,9 +673,17 @@ export function drawBand(els: Els, d: { board: RoadmapBoard; isOpen: boolean; co
         {d.isOpen ? '▾ Roadmap' : '▸ Roadmap'}
       </Button>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text dimColor wrap="truncate-end">
-          {tracks || 'no tracks yet'}
-        </Text>
+        {held ? (
+          <Text wrap="truncate-end">
+            <Text color="warning">this chat </Text>
+            <Text color={COLOR[held.status]}>{`${ICONS[held.status]} `}</Text>
+            {`${d.focus}  ${held.title}`}
+          </Text>
+        ) : (
+          <Text dimColor wrap="truncate-end">
+            {tracks || 'no tracks yet'}
+          </Text>
+        )}
       </Box>
       {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length}`}</Text> : null}
     </Box>

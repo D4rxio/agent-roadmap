@@ -12,7 +12,7 @@ import type {
   RoadmapWindow,
 } from '../types'
 
-export const STATUSES: RoadmapStatus[] = ['todo', 'running', 'done', 'failed', 'blocked', 'awaiting']
+export const STATUSES: RoadmapStatus[] = ['todo', 'running', 'done', 'failed', 'blocked', 'awaiting', 'skipped']
 /** A live file older than this is a session that stopped working. */
 export const LIVE_MS = 20_000
 
@@ -79,6 +79,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     status: RoadmapStatus
     note?: string
     evidence?: string
+    reason?: string
     startedAt?: number
     origin: RoadmapOrigin
     by?: string
@@ -118,6 +119,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         status: 'todo',
         checkpoint: t.checkpoint === true,
         blockedBy: (t.blockedBy ?? []).map(r => (r.includes('/') ? r.replace(/^#/, '') : `${e.track}/${r}`)),
+        why: t.why,
+        scope: t.scope,
+        doneWhen: t.doneWhen,
         agents: [],
         backlog: false,
       }))
@@ -140,6 +144,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         status: e.status,
         note: e.note,
         evidence: e.evidence,
+        reason: e.reason,
         origin,
         by: origin === 'person' ? 'you' : (s?.title ?? e.actor),
       })
@@ -197,12 +202,26 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       const said = (words.get(key(t.name, step.id)) ?? []).sort((a, b) => a.at - b.at)
       step.agents = [...agents.values()].filter(a => a.track === t.name && a.step === step.id).map(a => a.id)
       // Plan vs execution: a worker reports, the person closes. A worker's `done` on a
-      // checkpoint, or out of `failed`, waits for the person instead.
+      // checkpoint, or out of `failed`, waits for the person instead; so does any skip a worker
+      // proposes, since leaving work out is a decision about scope.
       let status: RoadmapStatus = 'todo'
+      let proposed: 'done' | 'skipped' | undefined
+      let skipReason: string | undefined
       for (const w of said) {
-        const gated: boolean = w.origin !== 'person' && w.status === 'done' && (step.checkpoint || status === 'failed')
+        const worker = w.origin !== 'person'
+        if (worker && w.status === 'skipped') {
+          status = 'awaiting'
+          proposed = 'skipped'
+          skipReason = w.reason ?? w.note
+          continue
+        }
+        const gated: boolean = worker && w.status === 'done' && (step.checkpoint || status === 'failed')
         status = gated ? 'awaiting' : w.status
+        proposed = gated ? 'done' : undefined
+        skipReason = w.status === 'skipped' ? (w.reason ?? w.note) : undefined
       }
+      step.proposed = status === 'awaiting' ? proposed : undefined
+      step.skipReason = skipReason
       const latest = said[said.length - 1]
       if (!latest) continue
       step.status = status
@@ -212,13 +231,16 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       step.lastAt = latest.at
       const firstActive = said.find(w => w.status !== 'todo' && w.status !== 'blocked')
       step.startedAt = status === 'todo' ? undefined : (firstActive?.startedAt ?? firstActive?.at)
-      step.endedAt = status === 'done' || status === 'failed' ? latest.at : undefined
+      step.endedAt = status === 'done' || status === 'failed' || status === 'skipped' ? latest.at : undefined
     }
   }
 
-  // A step waiting on unfinished steps is blocked until they are done.
+  // A step waiting on unfinished steps is blocked until they are done — or skipped: a step that
+  // will not be done must not hold its dependents back for ever.
   const doneRefs = new Set(
-    [...tracks.values()].flatMap(t => t.steps.filter(s => s.status === 'done').map(s => key(t.name, s.id))),
+    [...tracks.values()].flatMap(t =>
+      t.steps.filter(s => s.status === 'done' || s.status === 'skipped').map(s => key(t.name, s.id)),
+    ),
   )
   for (const t of tracks.values()) {
     for (const step of t.steps) {
@@ -233,6 +255,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       s.lastAt = Math.max(s.lastAt, live.at)
       s.isLive = isLive
       s.activity = isLive ? live.activity : undefined
+      s.focus = isLive ? live.focus : undefined
       if (live.title) s.title = live.title
       s.track = s.track ?? live.track
     } else {
@@ -245,6 +268,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         lastAt: live.at,
         isLive,
         activity: isLive ? live.activity : undefined,
+        focus: isLive ? live.focus : undefined,
       })
     }
     for (const seen of live.agents) {
@@ -272,6 +296,7 @@ export const ICONS: Record<RoadmapStatus, string> = {
   failed: '✗',
   blocked: '⊘',
   awaiting: '◆',
+  skipped: '↷',
 }
 
 /** What needs the person, across every track. */
@@ -310,7 +335,7 @@ function layOverPersonEdits(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEv
         }
         continue
       }
-      const phaseName = e.phase && t.phases.some(p => p.name === e.phase) ? e.phase : YOUR_PHASE
+      const phaseName = e.phase || YOUR_PHASE
       let phase = t.phases.find(p => p.name === phaseName)
       if (!phase) {
         phase = { name: phaseName, stepIds: [] }
@@ -399,17 +424,89 @@ export function byPriority(a: RoadmapStep, b: RoadmapStep): number {
   return rank(a) - rank(b)
 }
 
-/** The next free id for a step the person adds: u1, u2, … */
-export function nextPersonId(track: RoadmapTrack, events: RoadmapEvent[]): string {
+/**
+ * A fresh id with a prefix (u for the person's items, f for follow-ups) and a short random part:
+ * two chats adding at the same moment never pick the same id, which a counter would.
+ */
+export function nextId(track: RoadmapTrack, events: RoadmapEvent[], prefix: string): string {
   const used = new Set([...track.steps.map(s => s.id), ...events.filter(e => e.kind === 'add' && e.track === track.name).map(e => (e as { id: string }).id)])
-  let n = 1
-  while (used.has(`u${n}`)) n++
-  return `u${n}`
+  for (;;) {
+    const id = `${prefix}${Math.random().toString(36).slice(2, 7).padEnd(5, '0')}`
+    if (!used.has(id)) return id
+  }
 }
 
-/** The track's progress over the steps that count: backlog steps are set aside. */
+export function nextPersonId(track: RoadmapTrack, events: RoadmapEvent[]): string {
+  return nextId(track, events, 'u')
+}
+
+export const FOLLOW_UPS = 'Follow-ups'
+
+/** A loop in the `blocked_by` graph across all tracks, as `a → b → … → a`, or undefined. */
+export function findCycle(tracks: RoadmapTrack[]): string[] | undefined {
+  const edges = new Map<string, string[]>()
+  for (const t of tracks) for (const s of t.steps) edges.set(`${t.name}/${s.id}`, s.blockedBy)
+  const state = new Map<string, 1 | 2>()
+  const path: string[] = []
+  const visit = (node: string): string[] | undefined => {
+    if (state.get(node) === 2) return undefined
+    if (state.get(node) === 1) return [...path.slice(path.indexOf(node)), node]
+    state.set(node, 1)
+    path.push(node)
+    for (const next of edges.get(node) ?? []) {
+      if (!edges.has(next)) continue
+      const loop = visit(next)
+      if (loop) return loop
+    }
+    path.pop()
+    state.set(node, 2)
+    return undefined
+  }
+  for (const node of edges.keys()) {
+    const loop = visit(node)
+    if (loop) return loop
+  }
+  return undefined
+}
+
+/** Everything an agent needs before working on one step: what, why, the boundaries, when it is done. */
+export function brief(board: RoadmapBoard, track: string, id: string, me?: string): string | undefined {
+  const t = board.tracks.find(x => x.name === track)
+  const s = t?.steps.find(x => x.id === id)
+  if (!t || !s) return undefined
+  const ref = (r: string) => {
+    const [tn, sid] = [r.slice(0, r.indexOf('/')), r.slice(r.indexOf('/') + 1)]
+    const dep = board.tracks.find(x => x.name === tn)?.steps.find(x => x.id === sid)
+    return dep
+      ? `${ICONS[dep.status]} ${r} ${dep.title} (${dep.status}${dep.status === 'skipped' ? `: ${dep.skipReason ?? 'no reason'}` : ''})`
+      : `? ${r} (unknown)`
+  }
+  const dependents = board.tracks.flatMap(x =>
+    x.steps.filter(y => y.blockedBy.includes(`${track}/${id}`)).map(y => `${ICONS[y.status]} ${x.name}/${y.id} ${y.title}`),
+  )
+  const lines = [
+    `${track}/${id} — ${s.title}`,
+    `Track: ${t.title}${t.backlog ? ' (track in backlog)' : ''} · phase: ${s.phase}`,
+    `Status: ${s.status}${s.status === 'skipped' ? ` (${s.skipReason ?? 'no reason'})` : ''}${s.status === 'awaiting' && s.proposed === 'skipped' ? ` (a skip is proposed: ${s.skipReason ?? 'no reason'})` : ''}${s.priority ? ` · priority ${s.priority}` : ''}${s.backlog ? ' · IN BACKLOG — do not work on it unless asked' : ''}${s.checkpoint ? ' · checkpoint: the person closes it' : ''}${s.addedBy ? ' · added by the person' : ''}`,
+    s.why ? `Why: ${s.why}` : 'Why: (not written — ask, or infer it from the track and say so)',
+    s.scope ? `Scope: ${s.scope}` : '',
+    s.doneWhen ? `Done when: ${s.doneWhen}` : 'Done when: (not written — agree it before you call it done)',
+    s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
+    dependents.length ? `Unblocks:\n${dependents.map(x => `  ${x}`).join('\n')}` : '',
+    s.evidence ? `Last evidence: ${s.evidence}` : '',
+    s.note ? `Last note: ${s.note}` : '',
+    s.lastBy && s.lastAt ? `Last moved by: ${s.lastBy}` : '',
+    ...board.sessions
+      .filter(x => x.isLive && x.id !== me && x.focus === `${track}/${id}`)
+      .map(x => `Another chat holds this step right now: "${x.title}" — coordinate with the person before working on it too.`),
+    'When you finish: roadmap done with what shipped, the evidence, and any follow-ups.',
+  ]
+  return lines.filter(Boolean).join('\n')
+}
+
+/** The track's progress over the steps that count: backlog and skipped steps are set aside. */
 export function progress(track: RoadmapTrack): { done: number; total: number } {
-  const active = track.steps.filter(s => !s.backlog)
+  const active = track.steps.filter(s => !s.backlog && s.status !== 'skipped')
   return { done: active.filter(s => s.status === 'done').length, total: active.length }
 }
 
@@ -421,12 +518,23 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
     const { done, total } = progress(t)
     lines.push(`- ${t.priority ? `${t.priority} ` : ''}${t.name} — ${t.title}: ${done}/${total} done`)
     // Open work, most important first: what a new session should pick up.
-    const open = t.steps.filter(s => s.status !== 'done' && !s.backlog).sort(byPriority)
+    const open = t.steps.filter(s => s.status !== 'done' && s.status !== 'skipped' && !s.backlog).sort(byPriority)
     for (const s of open.slice(0, opts.open ?? 6)) {
-      const why = s.status === 'blocked' ? ` (blocked by ${s.blockedBy.join(', ')})` : s.status === 'awaiting' ? ' (awaiting the person)' : ''
+      const why =
+        s.status === 'blocked'
+          ? ` (blocked by ${s.blockedBy.join(', ')})`
+          : s.status === 'awaiting'
+            ? s.proposed === 'skipped'
+              ? ` (a skip awaits the person: ${s.skipReason ?? 'no reason'})`
+              : ' (awaiting the person)'
+            : ''
       lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${why}`)
     }
     if (open.length > (opts.open ?? 6)) lines.push(`    … ${open.length - (opts.open ?? 6)} more open`)
+    const skipped = t.steps.filter(s => s.status === 'skipped')
+    if (skipped.length) {
+      lines.push(`    skipped (decided not to do): ${skipped.map(s => `${t.name}/${s.id} — ${s.skipReason ?? 'no reason'}`).join('; ')}`)
+    }
     const shelved = t.steps.filter(s => s.backlog)
     if (shelved.length) {
       lines.push(`    backlog (set aside, not to work on unless asked): ${shelved.map(s => `${t.name}/${s.id}`).join(', ')}`)
@@ -526,7 +634,7 @@ export function when(at: number, now: number, offsetMin: number): string {
 
 export type DayEntry = {
   at: number
-  kind: 'done' | 'started' | 'failed' | 'awaiting' | 'session' | 'agent'
+  kind: 'done' | 'started' | 'failed' | 'awaiting' | 'skipped' | 'session' | 'agent'
   text: string
   track?: string
 }
@@ -548,6 +656,7 @@ export function days(board: RoadmapBoard, now: number, offsetMin: number, limit 
       const label = `${t.name}/${s.id} ${s.title}`
       if (s.status === 'done') add(s.endedAt, { kind: 'done', text: label, track: t.name })
       if (s.status === 'failed') add(s.endedAt, { kind: 'failed', text: label, track: t.name })
+      if (s.status === 'skipped') add(s.endedAt, { kind: 'skipped', text: `${label} — ${s.skipReason ?? ''}`, track: t.name })
       if (s.status === 'awaiting') add(s.lastAt, { kind: 'awaiting', text: label, track: t.name })
       if (s.startedAt !== undefined && dayOf(s.startedAt, offsetMin) !== dayOf(s.endedAt ?? -1, offsetMin)) {
         add(s.startedAt, { kind: 'started', text: label, track: t.name })
@@ -592,9 +701,9 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
     if (own2.length === 0) continue
     lines.push(`### ${p.name} (${own2.filter(s => s.status === 'done').length}/${own2.length})`)
     for (const s of own2) {
-      const box = s.status === 'done' ? '[x]' : '[ ]'
+      const box = s.status === 'done' ? '[x]' : s.status === 'skipped' ? '[-]' : '[ ]'
       const tags = [
-        s.status !== 'done' && s.status !== 'todo' ? s.status : '',
+        s.status === 'skipped' ? `skipped: ${s.skipReason ?? 'no reason'}` : s.status !== 'done' && s.status !== 'todo' ? s.status : '',
         s.checkpoint ? 'checkpoint' : '',
         s.addedBy ? 'added by you' : '',
         s.status === 'blocked' ? `waits on ${s.blockedBy.join(', ')}` : '',
@@ -603,6 +712,9 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
         s.lastAt && s.status !== 'todo' ? when(s.lastAt, now, offsetMin) : '',
       ].filter(Boolean)
       lines.push(`- ${box} ${s.priority ? `**${s.priority}** ` : ''}${track.name}/${s.id} ${s.title}${tags.length ? ` — ${tags.join('; ')}` : ''}`)
+      if (s.why) lines.push(`  - why: ${s.why}`)
+      if (s.scope) lines.push(`  - scope: ${s.scope}`)
+      if (s.doneWhen) lines.push(`  - done when: ${s.doneWhen}`)
     }
     lines.push('')
   }

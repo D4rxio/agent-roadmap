@@ -1,0 +1,6 @@
+{
+  "name": "roadmap",
+  "private": true,
+  "type": "module",
+  "bin": { "roadmap": "./cli/roadmap.mjs" }
+}

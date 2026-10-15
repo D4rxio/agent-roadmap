@@ -14,6 +14,16 @@ what happened across five chats, and a fresh session knows where things stand.
 <p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: tracks with progress bars and priorities, a checkpoint awaiting confirmation, steps with their state, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
+## What's new in 0.2.0
+
+- **Step briefs** — `why`, `scope` and `done_when` on every step; an agent reads them before it starts.
+- **Hand-off with follow-ups** — `roadmap done` records what shipped and files follow-ups in the backlog.
+- **Skipped, with a reason** — say a step will not be done; it stops counting and stops blocking.
+- **Each chat holds its item** — see at a glance which chat works on which step.
+- **CLI for any agent** — Codex and scripts share the same roadmap from a terminal.
+
+Full history: [CHANGELOG.md](CHANGELOG.md).
+
 **What it is not:** a project manager. There are no accounts, assignees, sprints, estimates, comments or
 boards. It is a small shared state that agents and you both read and write — the plan, what is done,
 what is next, what waits on whom — kept as plain JSON files.
@@ -25,7 +35,8 @@ what is next, what waits on whom — kept as plain JSON files.
 - **You stay in charge.** Agents report, you close: a step marked as a checkpoint waits for your
   **Confirm ✓**, and your priorities and backlog decisions always win over an agent's.
 - **Memory for your agents.** A new session starts knowing the tracks, the open steps in priority order,
-  what is blocked, and what is set aside in the backlog.
+  what is blocked, what is set aside in the backlog, and which chat holds which step.
+- **Works beyond Claude Code.** A small CLI gives Codex or any script the same roadmap from a terminal.
 
 ## Install
 
@@ -59,7 +70,8 @@ or let it read and update one as it works. The pane opens on its own in the desk
   momentum ("yesterday +3 · moved 14:02"), and the steps when expanded.
   - Click a step's icon to move it ○ → ◐ → ✓ (your word, so it also closes a checkpoint).
   - Click the `P·` chip to raise its priority: P3 → P2 → P1 → P0.
-  - Hover a step for **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
+  - Hover a step for **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
+    **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
   - Hover a track header for **Backlog** to set the whole track aside.
   - **+ Add an item** at the bottom of a track adds your own step, marked **✎ you**. Agents may refine
     it, but they never lose it.
@@ -67,16 +79,37 @@ or let it read and update one as it works. The pane opens on its own in the desk
 - **Days.** Steps done per day over the last two weeks, and what happened each day: done, started,
   sessions, agents.
 - **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**.
-- **Needs you.** Checkpoints waiting for **Confirm ✓ / Reject**, and failed steps.
+- **This chat.** The step this chat holds, first thing in its pane; every pane marks which chat holds which step.
+- **Needs you.** Checkpoints and proposed skips waiting for **Confirm / Reject**, and failed steps.
 - **Working now.** Live sessions and subagents and what each one is doing this moment.
 
 ### Tools the model gets
 
 | Tool | Purpose |
 |---|---|
-| `roadmap plan` | lay out or re-lay one track: phases, steps, checkpoints, `blocked_by` dependencies |
-| `roadmap mark` | report a step's status with evidence; propose a priority or backlog (`<track>/*` for a whole track) |
-| `roadmap status` | read every track's open steps and the sessions working now |
+| `roadmap plan` | lay out or re-lay one track: phases, steps with `why` / `scope` / `done_when`, checkpoints, `blocked_by` (loops are refused) |
+| `roadmap step` | read one step's brief before working on it |
+| `roadmap mark` | report a status with evidence (`skipped` needs a reason); propose a priority or backlog (`<track>/*` for a whole track) |
+| `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
+| `roadmap status` | read every track's open steps and who is working on what |
+
+## Other agents: the CLI
+
+Codex, scripts or any agent that can run a command use the same roadmap through `cli/roadmap.mjs`
+(Node ≥ 23.6, no dependencies; it runs the plugin's own model, so the rules are the same):
+
+```
+node cli/roadmap.mjs status                 # open steps by priority, who is working on what
+node cli/roadmap.mjs step api/2.1           # a step's brief
+node cli/roadmap.mjs json                   # the whole board, for analysis
+node cli/roadmap.mjs plan api plan.json     # lay out a track from JSON
+node cli/roadmap.mjs mark api/2.1 running
+node cli/roadmap.mjs done api/2.1 --shipped "…" --evidence "…" --follow-up "title:P2"
+```
+
+[`cli/AGENTS-snippet.md`](cli/AGENTS-snippet.md) is a ready-to-paste block for an agent's `AGENTS.md`.
+An agent running in a sandbox needs write access to the journal folder only (for Codex:
+`[sandbox_workspace_write] writable_roots = ["<home>/.claude/roadmap"]`).
 
 ## Where the data lives
 

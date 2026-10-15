@@ -13,7 +13,7 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - **A worker reports, the person closes.** A worker's `done` on a `checkpoint` step, or on a step that last
   `failed`, becomes `awaiting` until an event with `"origin": "person"` confirms it.
 - `live/<session>.json` is a worker's heartbeat, rewritten by that worker only. A file older than 20 s
-  belongs to a worker that stopped.
+  belongs to a worker that stopped. Its optional `focus` (`<track>/<id>`) is the step that worker holds.
 
 ## Events
 
@@ -34,7 +34,13 @@ Any tool may read it, and append to it under the same rules, so other agents and
 {"kind":"triage","at":0,"session":"s","track":"docs","backlog":true,"origin":"person"}
 ```
 
-- `status`: `todo | running | done | failed | blocked`. `awaiting` is computed, never written.
+- `status`: `todo | running | done | failed | blocked | skipped`. `awaiting` is computed, never written.
+  `skipped` needs a `reason`: the step will not be done. It leaves progress and stops blocking its
+  dependents. A worker's `skipped` is a proposal that awaits the person; the person's is final.
+- Plan steps may carry `why`, `scope` and `doneWhen` (the step's brief); a plan whose `blockedBy`
+  closes a loop must not be written.
+- Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
+  (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.
 - `add` and `edit` are laid over every plan: a step the person added survives a re-laid track (back into
   "Your items" if the plan leaves it out) and keeps its "added by you" mark. The latest word on a title
@@ -43,3 +49,12 @@ Any tool may read it, and append to it under the same rules, so other agents and
   `backlog: true` sets a step aside (or, with no `id`, a whole track): it keeps its status but leaves
   progress and the next-work list. Per field the person's latest word wins; an agent's applies only
   where the person has said nothing.
+
+## Archive
+
+Loose event files older than a day, once there are more than 200, are moved by a session into one
+bundle `archive/<first-at>-<session>-<random>.jsonl`: a header line `{"bundle": 1, "count": N}`, then one
+line per event `{"n": "<original file name>", "e": <event>}`. A bundle is written once and never
+changed; the loose files are deleted only after the bundle has been read back and counted. Readers count
+an event once by its name, and read a bundle again while it has fewer rows than its header says (it is
+still being written).
