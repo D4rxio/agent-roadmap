@@ -7,6 +7,9 @@ Every Claude Code session reads the same state when it starts and writes back wh
 tick off their own steps; you see the whole picture in a side pane. You no longer have to piece together
 what happened across five chats, and a fresh session knows where things stand.
 
+<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: tracks with progress bars and priorities, a checkpoint awaiting confirmation, steps with their state, and the sessions and subagents working now"></p>
+<p align="center"><sub>Illustration with sample data.</sub></p>
+
 **What it is not:** a project manager. There are no accounts, assignees, sprints, estimates, comments or
 boards. It is a small shared state that agents and you both read and write — the plan, what is done,
 what is next, what waits on whom — kept as plain JSON files.
