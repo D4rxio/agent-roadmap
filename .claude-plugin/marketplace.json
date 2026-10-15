@@ -1,0 +1,14 @@
+{
+  "name": "claude-roadmap",
+  "description": "Roadmap: shared planning state for coding agents.",
+  "owner": {
+    "name": "D4rxio"
+  },
+  "plugins": [
+    {
+      "name": "roadmap",
+      "source": "./",
+      "description": "Shared planning state for coding agents: plan, backlog, priorities, dependencies and progress in one file-based roadmap."
+    }
+  ]
+}

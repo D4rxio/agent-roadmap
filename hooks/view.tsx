@@ -1,0 +1,585 @@
+import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
+import { ICONS, PRIORITIES, attention, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Els = Record<string, any>
+
+export type RoadmapView = 'tracks' | 'days' | 'backlog'
+
+export type PaneData = {
+  board: RoadmapBoard
+  view: RoadmapView
+  expanded: string[]
+  now: number
+  tz: number
+  me: string
+  cols: number
+  canDraw: boolean
+  onView: (view: RoadmapView) => void
+  onToggle: (track: string) => void
+  onCopyTrack: (track: string, surface: string) => void
+  onCopyAll: (surface: string) => void
+  onDecide: (track: string, id: string, status: RoadmapStatus) => void
+  /** `<track>/<id>` being renamed, or ''. */
+  editing: string
+  onCycle: (track: string, id: string, status: RoadmapStatus) => void
+  onAdd: (track: string, title: string) => void
+  onStartEdit: (ref: string) => void
+  onRename: (track: string, id: string, title: string) => void
+  onRemove: (track: string, id: string) => void
+  onPriority: (track: string, id: string, priority: RoadmapPriority | null) => void
+  onBacklog: (track: string, id: string, backlog: boolean) => void
+  onTrackPriority: (track: string, priority: RoadmapPriority | null) => void
+  onTrackBacklog: (track: string, backlog: boolean) => void
+}
+
+/** A click on the priority chip raises it: none → P3 → P2 → P1 → P0 → none. */
+export function nextPriority(p: RoadmapPriority | undefined): RoadmapPriority | null {
+  if (!p) return 'P3'
+  const i = PRIORITIES.indexOf(p)
+  return i === 0 ? null : (PRIORITIES[i - 1] ?? null)
+}
+
+const PRIO_COLOR: Record<RoadmapPriority, string> = { P0: 'error', P1: 'warning', P2: 'suggestion', P3: 'subtle' }
+
+function prioChip(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
+  const { Button, Text } = els
+  return (
+    <Button key={`prio-${t.name}/${s.id}`} plain onPress={() => d.onPriority(t.name, s.id, nextPriority(s.priority))}>
+      {s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>P·</Text>}
+    </Button>
+  )
+}
+
+/** What a click on a step's icon makes of it: the person's own word, so it also closes a checkpoint. */
+export function nextStatus(status: RoadmapStatus): RoadmapStatus {
+  if (status === 'todo' || status === 'blocked' || status === 'failed') return 'running'
+  if (status === 'running' || status === 'awaiting') return 'done'
+  return 'todo'
+}
+
+const COLOR: Record<RoadmapStatus, string> = {
+  todo: 'subtle',
+  running: 'warning',
+  done: 'success',
+  failed: 'error',
+  blocked: 'subtle',
+  awaiting: 'permission',
+}
+
+// Mid-tone fills that read on both a light and a dark page.
+const FILL: Record<RoadmapStatus, string> = {
+  done: '#3fb950',
+  awaiting: '#58a6ff',
+  running: '#d29922',
+  blocked: 'url(#blocked)',
+  failed: '#e5534b',
+  todo: 'rgba(128,128,128,0.22)',
+}
+
+const ORDER: RoadmapStatus[] = ['done', 'awaiting', 'running', 'blocked', 'failed', 'todo']
+
+/** One stacked bar: done, awaiting, running, blocked, failed, then what is left. */
+export function progressSvg(steps: RoadmapStep[]): string {
+  const total = Math.max(1, steps.length)
+  let x = 0
+  const rects = ORDER.map(status => {
+    const n = steps.filter(s => s.status === status).length
+    if (n === 0) return ''
+    const w = (n / total) * 1000
+    const r = `<rect x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="6" fill="${FILL[status]}"/>`
+    x += w
+    return r
+  }).join('')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="6" viewBox="0 0 1000 6" preserveAspectRatio="none">` +
+    `<clipPath id="r"><rect width="1000" height="6" rx="3" ry="3"/></clipPath>` +
+    // Blocked is waiting, not broken: muted diagonal stripes, red stays for failed.
+    `<pattern id="blocked" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
+    `<rect width="6" height="6" fill="rgba(128,128,128,0.30)"/><rect width="3" height="6" fill="rgba(128,128,128,0.55)"/></pattern>` +
+    `<g clip-path="url(#r)">` +
+    `<rect width="1000" height="6" fill="${FILL.todo}"/>${rects}</g></svg>`
+  )
+}
+
+/** Steps finished per day, oldest first; today's bar is the brightest. */
+export function sparkSvg(series: number[]): string {
+  const max = Math.max(1, ...series)
+  const w = 1000 / series.length
+  const bars = series
+    .map((n, i) => {
+      const h = n === 0 ? 2 : 4 + (n / max) * 32
+      const last = i === series.length - 1
+      const fill = n === 0 ? 'rgba(128,128,128,0.25)' : last ? '#3fb950' : 'rgba(63,185,80,0.6)'
+      return `<rect x="${(i * w + w * 0.15).toFixed(1)}" y="${(36 - h).toFixed(1)}" width="${(w * 0.7).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${fill}"><title>${n} done</title></rect>`
+    })
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="36" viewBox="0 0 1000 36" preserveAspectRatio="none">${bars}</svg>`
+}
+
+const BLOCKS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+function sparkText(series: number[]): string {
+  const max = Math.max(1, ...series)
+  return series.map(n => (n === 0 ? '·' : BLOCKS[Math.min(7, Math.round((n / max) * 7))])).join('')
+}
+
+function stepRight(s: RoadmapStep, d: PaneData): string {
+  if (s.status === 'blocked') return `waits on ${s.blockedBy.join(', ')}`
+  if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
+  if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
+  if (s.status === 'awaiting') return 'to confirm'
+  if (s.status === 'failed') return s.endedAt ? `failed ${when(s.endedAt, d.now, d.tz)}` : 'failed'
+  return ''
+}
+
+/** "today +2 · yesterday +3 · last 14:02": a track's recent momentum in one line. */
+function momentum(t: RoadmapTrack, d: PaneData): string {
+  const today = dayOf(d.now, d.tz)
+  let td = 0
+  let yd = 0
+  for (const s of t.steps) {
+    if (s.status !== 'done' || s.endedAt === undefined) continue
+    const day = dayOf(s.endedAt, d.tz)
+    if (day === today) td++
+    else if (day === today - 1) yd++
+  }
+  const parts = [td ? `today +${td}` : '', yd ? `yesterday +${yd}` : '']
+  const last = Math.max(0, ...t.steps.map(s => s.lastAt ?? 0))
+  if (last) parts.push(`moved ${when(last, d.now, d.tz)}`)
+  return parts.filter(Boolean).join(' · ')
+}
+
+function Row(els: Els, key: string, left: any, right?: string, rightColor?: string) {
+  const { Box, Text } = els
+  return (
+    <Box key={key} flexDirection="row" gap={1}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        {left}
+      </Box>
+      {right ? (
+        <Text dimColor={!rightColor} color={rightColor} wrap="truncate-end">
+          {right}
+        </Text>
+      ) : null}
+    </Box>
+  )
+}
+
+function Bar(els: Els, d: PaneData, key: string, steps: RoadmapStep[]) {
+  const { Text, Svg } = els
+  if (d.canDraw && Svg) return <Svg key={key} source={progressSvg(steps)} alt="progress" height={6} />
+  const done = steps.filter(s => s.status === 'done').length
+  return (
+    <Text key={key} color="success">
+      {progressBar(done, steps.length, Math.max(8, Math.min(40, d.cols - 4)))}
+    </Text>
+  )
+}
+
+function header(els: Els, d: PaneData) {
+  const { Box, Text, Button } = els
+  const tab = (view: RoadmapView, label: string) => (
+    <Button key={`view-${view}`} plain variant={d.view === view ? 'primary' : undefined} onPress={() => d.onView(view)}>
+      {d.view === view ? `[${label}]` : ` ${label} `}
+    </Button>
+  )
+  return (
+    <Box key="header" flexDirection="row" gap={1} marginBottom={1}>
+      <Text bold>Roadmap</Text>
+      {tab('tracks', 'Tracks')}
+      {tab('days', 'Days')}
+      {tab(
+        'backlog',
+        `Backlog ${d.board.tracks.filter(t => t.backlog).length + d.board.tracks.flatMap(t => t.steps).filter(x => x.backlog).length}`,
+      )}
+      <Box flexGrow={1} />
+      <Button key="copy-all" plain onPress={(press: any) => d.onCopyAll(press?.surface ?? 'desktop')}>
+        ⧉ Copy all as Markdown
+      </Button>
+    </Box>
+  )
+}
+
+function needsYou(els: Els, d: PaneData) {
+  const { Box, Text, Button } = els
+  const needs = attention(d.board)
+  if (needs.awaiting.length + needs.failed.length === 0) return null
+  const titleOf = (track: string) => d.board.tracks.find(t => t.name === track)?.title ?? track
+  return (
+    <Box key="attention" flexDirection="column" marginBottom={1}>
+      <Box flexDirection="row" gap={2}>
+        <Text bold>Needs you</Text>
+        {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length} to confirm`}</Text> : null}
+        {needs.failed.length ? <Text color="error">{`✗ ${needs.failed.length} failed`}</Text> : null}
+      </Box>
+      {needs.awaiting.map(st => (
+        <Box key={`await-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
+          <Text wrap="truncate-end">
+            <Text color="permission">◆ </Text>
+            {`${titleOf(st.track)} · ${st.id} ${st.title}`}
+          </Text>
+          {st.evidence || st.lastBy ? (
+            <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}`}</Text>
+          ) : null}
+          <Box flexDirection="row" gap={1} marginTop={0}>
+            <Text>{'  '}</Text>
+            <Button key={`ok-${st.track}-${st.id}`} variant="primary" onPress={() => d.onDecide(st.track, st.id, 'done')}>
+              Confirm ✓
+            </Button>
+            <Button key={`no-${st.track}-${st.id}`} onPress={() => d.onDecide(st.track, st.id, 'failed')}>
+              Reject
+            </Button>
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
+  const { Box, Text, Button } = els
+  const { done, total } = progress(t)
+  const pct = total ? Math.round((done / total) * 100) : 0
+  const isOpen = d.expanded.includes(t.name)
+  const active = t.steps.filter(s => !s.backlog)
+  const shelved = t.steps.filter(s => s.backlog).sort(byPriority)
+  const blocked = active.filter(s => s.status === 'blocked').length
+  const running = t.steps.filter(s => s.status === 'running').length
+  const awaiting = t.steps.filter(s => s.status === 'awaiting').length
+  const live = d.board.sessions.filter(s => s.isLive && s.track === t.name).length
+  const chips = [
+    running ? `◐ ${running}` : '',
+    awaiting ? `◆ ${awaiting}` : '',
+    blocked ? `⊘ ${blocked}` : '',
+    live ? `● ${live} live` : '',
+    shelved.length ? `${shelved.length} in backlog` : '',
+  ].filter(Boolean)
+  return (
+    <Box key={`track-${t.name}`} flexDirection="column" marginBottom={1}>
+      <Box flexDirection="row" gap={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button key={`fold-${t.name}`} plain onPress={() => d.onToggle(t.name)}>
+            {`${isOpen ? '▾' : '▸'} `}
+            <Text bold color={done === total && total > 0 ? 'success' : undefined}>
+              {t.title}
+            </Text>
+          </Button>
+        </Box>
+        <Box flexDirection="row" display={d.canDraw ? 'none' : 'flex'} hover={d.canDraw ? { display: 'flex' } : undefined}>
+          <Button key={`tshelve-${t.name}`} plain onPress={() => d.onTrackBacklog(t.name, !t.backlog)}>
+            <Text dimColor>{t.backlog ? '' : 'Backlog'}</Text>
+          </Button>
+        </Box>
+        {t.backlog ? (
+          <Button key={`trestore-${t.name}`} plain onPress={() => d.onTrackBacklog(t.name, false)}>
+            <Text color="suggestion">↺ Restore</Text>
+          </Button>
+        ) : null}
+        <Button key={`tprio-${t.name}`} plain onPress={() => d.onTrackPriority(t.name, nextPriority(t.priority))}>
+          {t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>P·</Text>}
+        </Button>
+        <Text bold>{`${pct}%`}</Text>
+        <Text dimColor>{`${done}/${total}`}</Text>
+      </Box>
+      {Bar(els, d, `bar-${t.name}`, active)}
+      {Row(els, `meta-${t.name}`, <Text dimColor wrap="truncate-end">{momentum(t, d) || t.name}</Text>, chips.join('  '))}
+      {isOpen &&
+        t.phases.map(p => {
+          const own = active.filter(s => p.stepIds.includes(s.id))
+          const pDone = own.filter(s => s.status === 'done').length
+          if (own.length === 0) return null
+          return (
+            <Box key={`phase-${t.name}-${p.name}`} flexDirection="column" marginTop={1}>
+              {Row(
+                els,
+                `ph-${t.name}-${p.name}`,
+                <Text dimColor bold wrap="truncate-end">
+                  {p.name}
+                </Text>,
+                `${pDone}/${own.length}`,
+              )}
+              {own.map(s => stepRow(els, d, t, s))}
+            </Box>
+          )
+        })}
+      {isOpen && shelved.length ? (
+        <Box key={`shelf-${t.name}`} flexDirection="column" marginTop={1}>
+          {Row(els, `shelf-h-${t.name}`, <Text dimColor bold>Backlog</Text>, `${shelved.length} set aside`)}
+          {shelved.map(s => stepRow(els, d, t, s))}
+        </Box>
+      ) : null}
+      {isOpen && els.Input ? (
+        <Box flexDirection="row" marginTop={1}>
+          <els.Input
+            key={`add-${t.name}`}
+            placeholder="+ Add an item, Enter to save"
+            value=""
+            onSubmit={(value: string) => {
+              if (value.trim()) d.onAdd(t.name, value.trim())
+            }}
+          />
+        </Box>
+      ) : null}
+      {isOpen ? (
+        <Box flexDirection="row" marginTop={1}>
+          <Button key={`copy-${t.name}`} plain onPress={(press: any) => d.onCopyTrack(t.name, press?.surface ?? 'desktop')}>
+            ⧉ Copy as Markdown
+          </Button>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
+  const { Box, Text, Button, Input } = els
+  const ref = `${t.name}/${s.id}`
+  if (d.editing === ref && Input) {
+    return (
+      <Box key={`step-${ref}`} flexDirection="row" gap={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Input
+            key={`edit-${ref}`}
+            value={s.title}
+            autoFocus
+            onSubmit={(value: string) => {
+              if (value.trim() && value.trim() !== s.title) d.onRename(t.name, s.id, value.trim())
+              d.onStartEdit('')
+            }}
+          />
+        </Box>
+        <Button key={`cancel-${ref}`} plain onPress={() => d.onStartEdit('')}>
+          Cancel
+        </Button>
+      </Box>
+    )
+  }
+  const right = stepRight(s, d)
+  return (
+    <Box key={`step-${ref}`} flexDirection="row" gap={1}>
+      <Button key={`cycle-${ref}`} plain onPress={() => d.onCycle(t.name, s.id, nextStatus(s.status))}>
+        <Text color={COLOR[s.status]}>{ICONS[s.status]}</Text>
+      </Button>
+      {prioChip(els, d, t, s)}
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end" dimColor={s.status === 'done' || s.backlog}>
+          {`${s.id}  ${s.title}`}
+          {s.addedBy ? <Text color="suggestion">{'  ✎ you'}</Text> : null}
+        </Text>
+      </Box>
+      {right ? (
+        <Text
+          dimColor={s.status !== 'awaiting'}
+          color={s.status === 'awaiting' ? 'permission' : undefined}
+          wrap="truncate-end"
+        >
+          {right}
+        </Text>
+      ) : null}
+      {s.backlog ? (
+        <Button key={`shelve-${ref}`} plain onPress={() => d.onBacklog(t.name, s.id, false)}>
+          <Text color="suggestion">↺ Restore</Text>
+        </Button>
+      ) : null}
+      {/* Row actions stay out of sight until the pointer is on the row (desktop); the terminal shows them. */}
+      <Box
+        flexDirection="row"
+        gap={1}
+        display={d.canDraw ? 'none' : 'flex'}
+        hover={d.canDraw ? { display: 'flex' } : undefined}
+      >
+        {!s.backlog ? (
+          <Button key={`shelve-${ref}`} plain onPress={() => d.onBacklog(t.name, s.id, true)}>
+            <Text dimColor>Backlog</Text>
+          </Button>
+        ) : null}
+        {s.addedBy ? (
+          <Button key={`rename-${ref}`} plain onPress={() => d.onStartEdit(ref)}>
+            <Text dimColor>✎</Text>
+          </Button>
+        ) : null}
+        {s.addedBy ? (
+          <Button key={`remove-${ref}`} plain onPress={() => d.onRemove(t.name, s.id)}>
+            <Text dimColor>✕</Text>
+          </Button>
+        ) : null}
+      </Box>
+    </Box>
+  )
+}
+
+function liveSection(els: Els, d: PaneData) {
+  const { Box, Text } = els
+  const sessions = d.board.sessions.filter(s => s.isLive)
+  const agents = d.board.agents.filter(a => a.status === 'running')
+  if (sessions.length + agents.length === 0) return null
+  return (
+    <Box key="live" flexDirection="column" marginTop={1}>
+      <Text bold>{`Working now  ${sessions.length} sessions · ${agents.length} agents`}</Text>
+      {sessions.map(s =>
+        Row(
+          els,
+          `s-${s.id}`,
+          <Text wrap="truncate-end">
+            <Text color="warning">● </Text>
+            {`${s.title}${s.id === d.me ? ' (this)' : ''}`}
+          </Text>,
+          s.activity ? `→ ${s.activity}` : s.track,
+        ),
+      )}
+      {agents.map(a =>
+        Row(
+          els,
+          `a-${a.id}`,
+          <Text wrap="truncate-end">
+            <Text color="warning">{'  ◐ '}</Text>
+            {a.description}
+          </Text>,
+          [a.step ? `${a.track}/${a.step}` : '', a.activity ? `→ ${a.activity}` : `${duration(d.now - a.startedAt)}`]
+            .filter(Boolean)
+            .join(' · '),
+        ),
+      )}
+    </Box>
+  )
+}
+
+const KIND: Record<string, { icon: string; color: string }> = {
+  done: { icon: '✓', color: 'success' },
+  failed: { icon: '✗', color: 'error' },
+  awaiting: { icon: '◆', color: 'permission' },
+  started: { icon: '◐', color: 'warning' },
+  session: { icon: '●', color: 'subtle' },
+  agent: { icon: '◇', color: 'subtle' },
+}
+
+function daysView(els: Els, d: PaneData) {
+  const { Box, Text, Svg } = els
+  const series = doneSeries(d.board, d.now, d.tz, 14)
+  const list = days(d.board, d.now, d.tz, 14)
+  return (
+    <Box key="days" flexDirection="column">
+      {Row(els, 'spark-h', <Text dimColor>Steps done, last 14 days</Text>, `${series.reduce((a, b) => a + b, 0)} total`)}
+      {d.canDraw && Svg ? (
+        <Svg key="spark" source={sparkSvg(series)} alt="steps done per day" height={36} />
+      ) : (
+        <Text key="spark" color="success">
+          {sparkText(series)}
+        </Text>
+      )}
+      {list.length === 0 ? <Text dimColor>No activity yet.</Text> : null}
+      {list.map(day => {
+        const steps = day.entries.filter(x => x.kind !== 'session' && x.kind !== 'agent')
+        const sessions = day.entries.filter(x => x.kind === 'session').length
+        const agents = day.entries.filter(x => x.kind === 'agent').length
+        return (
+          <Box key={`day-${day.day}`} flexDirection="column" marginTop={1}>
+            {Row(
+              els,
+              `dh-${day.day}`,
+              <Text bold>{day.label}</Text>,
+              [day.done ? `✓ ${day.done}` : '', sessions ? `${sessions} sessions` : '', agents ? `${agents} agents` : '']
+                .filter(Boolean)
+                .join(' · '),
+            )}
+            {steps.slice(0, 12).map((x, i) =>
+              Row(
+                els,
+                `de-${day.day}-${i}`,
+                <Text wrap="truncate-end" dimColor={x.kind === 'started'}>
+                  <Text color={KIND[x.kind]?.color}>{`${KIND[x.kind]?.icon ?? '·'} `}</Text>
+                  {x.text}
+                </Text>,
+                when(x.at, d.now, d.tz),
+              ),
+            )}
+            {steps.length > 12 ? <Text dimColor>{`  … ${steps.length - 12} more`}</Text> : null}
+            {steps.length === 0 ? <Text dimColor>{`  ${sessions} sessions, no step moved`}</Text> : null}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+function backlogView(els: Els, d: PaneData) {
+  const { Box, Text } = els
+  const shelved = d.board.tracks.flatMap(t => t.steps.filter(s => s.backlog).map(s => ({ t, s })))
+  shelved.sort((a, b) => byPriority(a.s, b.s))
+  const shelvedTracks = d.board.tracks.filter(t => t.backlog)
+  if (shelved.length === 0 && shelvedTracks.length === 0) {
+    return (
+      <Box key="backlog" flexDirection="column">
+        <Text dimColor>The backlog is empty. Hover a step and press "Backlog" to set it aside; "↺ Restore" brings it back.</Text>
+      </Box>
+    )
+  }
+  return (
+    <Box key="backlog" flexDirection="column">
+      <Text dimColor>Set aside: not counted in progress, not offered to agents as next work.</Text>
+      {shelvedTracks.length ? (
+        <Box key="bl-tracks" flexDirection="column" marginTop={1}>
+          <Text bold>Tracks</Text>
+          {shelvedTracks.map(t => trackCard(els, d, t))}
+        </Box>
+      ) : null}
+      {shelved.length ? <Text bold>Steps</Text> : null}
+      {shelved.map(({ t, s }) => (
+        <Box key={`bl-${t.name}/${s.id}`} flexDirection="column" marginTop={1}>
+          <Text dimColor wrap="truncate-end">{t.title}</Text>
+          {stepRow(els, d, t, s)}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+export function drawPane(els: Els, d: PaneData) {
+  const { Box, Text } = els
+  if (d.board.tracks.length === 0 && d.board.sessions.length === 0) {
+    return (
+      <Box flexDirection="column">
+        {header(els, d)}
+        <Text dimColor>No tracks yet. Ask Claude to lay one out, e.g. "add a roadmap track for the API work".</Text>
+      </Box>
+    )
+  }
+  return (
+    <Box flexDirection="column">
+      {header(els, d)}
+      {needsYou(els, d)}
+      {d.view === 'days'
+        ? daysView(els, d)
+        : d.view === 'backlog'
+          ? backlogView(els, d)
+          : d.board.tracks.filter(t => !t.backlog).map(t => trackCard(els, d, t))}
+      {d.view === 'tracks' ? liveSection(els, d) : null}
+    </Box>
+  )
+}
+
+/** One line above the prompt: the tracks at a glance and the pane's toggle. */
+export function drawBand(els: Els, d: { board: RoadmapBoard; isOpen: boolean; cols: number; onToggle: () => void }) {
+  const { Box, Text, Button } = els
+  const needs = attention(d.board)
+  const tracks = d.board.tracks
+    .filter(t => !t.backlog)
+    .map(t => {
+      const { done, total } = progress(t)
+      return `${t.name} ${total ? Math.round((done / total) * 100) : 0}%`
+    })
+    .join(' · ')
+  return (
+    <Box flexDirection="row" gap={1}>
+      <Button key="band-toggle" plain variant="primary" onPress={() => d.onToggle()}>
+        {d.isOpen ? '▾ Roadmap' : '▸ Roadmap'}
+      </Button>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text dimColor wrap="truncate-end">
+          {tracks || 'no tracks yet'}
+        </Text>
+      </Box>
+      {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length}`}</Text> : null}
+    </Box>
+  )
+}
