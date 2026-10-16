@@ -41,6 +41,7 @@ const showBand = atom({ plugin: 'roadmap', key: 'band' } as const, true)
 const tzOffset = atom({ plugin: 'roadmap', key: 'tz' } as const, 0)
 const editing = atom({ plugin: 'roadmap', key: 'editing' } as const, '')
 const focus = atom({ plugin: 'roadmap', key: 'focus' } as const, '')
+const phaseOpen = atom({ plugin: 'roadmap', key: 'phaseOpen' } as const, {} as Record<string, boolean>)
 
 // The module's own memory of the shared journal; a reload re-reads it from disk.
 const journal = {
@@ -702,6 +703,8 @@ export const register: Register = on => {
       onView: next => void update($, view, () => next),
       onToggle: track =>
         void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
+      phaseOpen: await read($, phaseOpen),
+      onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })),
       onCopyTrack: (track, surface) =>
         void (async () => {
           const t = (await read($, board)).tracks.find(x => x.name === track)

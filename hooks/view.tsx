@@ -17,6 +17,9 @@ export type PaneData = {
   canDraw: boolean
   onView: (view: RoadmapView) => void
   onToggle: (track: string) => void
+  /** Phases opened or closed by hand in this chat, `<track>::<phase>` → open. */
+  phaseOpen: Record<string, boolean>
+  onTogglePhase: (key: string, open: boolean) => void
   onCopyTrack: (track: string, surface: string) => void
   onCopyAll: (surface: string) => void
   /** Copies one line of text (a title, a step reference) to the clipboard. */
@@ -377,17 +380,32 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
           const own = active.filter(s => p.stepIds.includes(s.id))
           const pDone = own.filter(s => s.status === 'done').length
           if (own.length === 0) return null
+          // A phase with work left, or holding this chat's step, starts open; a finished one starts
+          // closed. A hand toggle in this chat wins over the default.
+          const finished = own.every(s => s.status === 'done' || s.status === 'skipped')
+          const holds = own.some(s => d.focus === `${t.name}/${s.id}`)
+          const pkey = `${t.name}::${p.name}`
+          const open = d.phaseOpen[pkey] ?? (!finished || holds)
           return (
             <Box key={`phase-${t.name}-${p.name}`} flexDirection="column" marginTop={1}>
               {Row(
                 els,
                 `ph-${t.name}-${p.name}`,
-                <Text dimColor bold wrap="truncate-end">
-                  {p.name}
-                </Text>,
+                Btn(
+                  els,
+                  d,
+                  { key: `phasefold-${pkey}`, plain: true, onPress: () => d.onTogglePhase(pkey, !open) },
+                  `${open ? '▾' : '▸'} ${p.name}`,
+                  <Text>
+                    <Text dimColor>{`${open ? '▾' : '▸'} `}</Text>
+                    <Text dimColor bold color={finished ? 'success' : undefined}>
+                      {p.name}
+                    </Text>
+                  </Text>,
+                ),
                 `${pDone}/${own.length}`,
               )}
-              {own.map(s => stepRow(els, d, t, s))}
+              {open ? own.map(s => stepRow(els, d, t, s)) : null}
             </Box>
           )
         })}

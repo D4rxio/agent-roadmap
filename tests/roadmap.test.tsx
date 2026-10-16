@@ -349,6 +349,8 @@ test('from the pane: add an item, click its icon through the states, rename it, 
   await ui.press({ key: `cycle-api/${uid}` })
   expect(await ui.find({ text: /33%/ })).toBeDefined()
 
+  // Its phase is finished now, so it closed; open it again to rename the item.
+  await ui.press({ key: 'phasefold-api::Your items' })
   await ui.press({ key: `rename-api/${uid}` })
   await ui.input({ key: `edit-api/${uid}`, text: 'iPad + iPhone' })
   expect(await ui.find({ text: new RegExp(`${uid} {2}iPad \\+ iPhone`) })).toBeDefined()
@@ -903,12 +905,15 @@ test('from the tool and the pane: a skip needs a reason; the person confirms a p
   await ui.press({ key: 'ok-api-1.1' })
   expect(await ui.find({ text: /proposes skipping/ })).toBe(undefined)
   await ui.press({ key: 'fold-api' })
-  expect(await ui.find({ text: /skipped: covered by 1\.2/ })).toBeDefined()
+  expect(await ui.find({ text: /skipped: covered by 1\.2/ })).toBeDefined() // 1.2 still open, so the phase is too
   expect(await ui.find({ text: /0\/1/ })).toBeDefined()
 
   // The person skips 1.2 directly, with a reason typed in the row.
   await ui.press({ key: 'skipit-api/1.2' })
   await ui.input({ key: 'skip-api/1.2', text: 'out of scope this quarter' })
+  // Both steps are settled now, so the phase closed by default; open it to look.
+  expect(await ui.find({ text: /skipped: out of scope this quarter/ })).toBe(undefined)
+  await ui.press({ key: 'phasefold-api::Discovery' })
   expect(await ui.find({ text: /skipped: out of scope this quarter/ })).toBeDefined()
   // Clicking a skipped step's icon brings it back.
   await ui.press({ key: 'cycle-api/1.2' })
@@ -1100,4 +1105,62 @@ test('no truncating Text holds styled Texts: every row stays one line, so scroll
   expect(await ui.find({ text: /● this chat/ })).toBeDefined()
   expect(await ui.find({ text: /● a chat with a long ti…/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('phases with work left start open, finished ones start closed, a hand toggle wins', async ($, on) => {
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    phases: [
+      { name: 'Done phase', steps: [{ id: '1', title: 'Finished A' }, { id: '2', title: 'Skipped B' }] },
+      { name: 'Open phase', steps: [{ id: '3', title: 'Still to do' }] },
+    ],
+  }
+  const events = [
+    plan,
+    { kind: 'step', at: 1100, session: 's', track: 'api', id: '1', status: 'done', origin: 'person' },
+    { kind: 'step', at: 1200, session: 's', track: 'api', id: '2', status: 'skipped', reason: 'not needed', origin: 'person' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-sixteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'fold-api' })
+    expect(await ui.find({ text: /Still to do/ })).toBeDefined()
+    expect(await ui.find({ text: /Finished A/ })).toBe(undefined)
+    await ui.press({ key: 'phasefold-api::Done phase' })
+    expect(await ui.find({ text: /Finished A/ })).toBeDefined()
+    await ui.press({ key: 'phasefold-api::Open phase' })
+    expect(await ui.find({ text: /Still to do/ })).toBe(undefined)
+    // Back to the defaults for the next surface.
+    await ui.press({ key: 'phasefold-api::Done phase' })
+    await ui.press({ key: 'phasefold-api::Open phase' })
+    await ui.press({ key: 'fold-api' })
+    await ui.unmount()
+  }
 })

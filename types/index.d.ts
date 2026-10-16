@@ -207,6 +207,8 @@ declare module 'claude-code' {
       editing: string
       /** The item this chat holds, `<track>/<id>`, or ''. */
       focus: string
+      /** Phases this chat opened or closed by hand, `<track>::<phase>` → open; others follow the default. */
+      phaseOpen: Record<string, boolean>
     }
   }
 }
