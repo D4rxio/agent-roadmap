@@ -22,6 +22,7 @@ import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
 import * as model from '../hooks/model.ts'
+import * as actions from '../hooks/actions.ts'
 
 const argv = process.argv.slice(2)
 const flags = {}
@@ -138,36 +139,28 @@ function board() {
   return { events, lives, b: model.fold(events, lives, Date.now()) }
 }
 
-function resolve(b, text) {
-  const ref = model.parseRef(String(text ?? ''), b.tracks)
-  const t = ref && b.tracks.find(x => x.name === ref.track)
-  if (!ref || !t?.steps.some(s => s.id === ref.id)) fail(`no step "${text}". Known:\n${model.summary(b, { open: 50 })}`)
-  return ref
-}
 
 const offset = -new Date().getTimezoneOffset()
 
+/** Runs a shared action (hooks/actions.ts, the same the Claude tools run) and writes what it returns. */
+function act(run, activity) {
+  const { events, lives } = load()
+  const old = existsSync(join(DIR, 'live', `${session}.json`)) ? parse(readFileSync(join(DIR, 'live', `${session}.json`), 'utf8')) : undefined
+  const r = run({ events, lives, now: Date.now(), session, actor, focus: old?.focus })
+  if (!r.ok) fail(r.text)
+  if (r.emit.length) sessionEvent(events)
+  for (const ev of r.emit) emit(ev)
+  heartbeat(activity, r.focus)
+  process.stdout.write(r.text + '\n')
+}
+
 switch (command) {
-  case 'status': {
-    const { b } = board()
-    const others = b.sessions.filter(s => s.isLive && s.id !== session)
-    process.stdout.write(model.summary(b, { open: 50 }) + '\n')
-    if (others.length) {
-      process.stdout.write('\nWorking now:\n')
-      for (const s of others) {
-        process.stdout.write(`- ${s.title}${s.focus ? ` [holds ${s.focus}]` : ''}${s.activity ? ` → ${s.activity}` : ''}\n`)
-      }
-    }
-    heartbeat('roadmap status')
+  case 'status':
+    act(ctx => actions.statusAction(ctx), 'roadmap status')
     break
-  }
-  case 'step': {
-    const { b } = board()
-    const ref = resolve(b, args[0])
-    process.stdout.write(model.brief(b, ref.track, ref.id, session) + '\n')
-    heartbeat(`roadmap step ${ref.track}/${ref.id}`)
+  case 'step':
+    act(ctx => actions.stepAction(ctx, { step: args[0] }), `roadmap step ${args[0] ?? ''}`)
     break
-  }
   case 'json': {
     const { b } = board()
     process.stdout.write(JSON.stringify(b, null, 2) + '\n')
@@ -181,123 +174,43 @@ switch (command) {
     break
   }
   case 'plan': {
-    const track = model.slug(String(args[0] ?? ''))
-    if (!track || !args[1]) fail('usage: roadmap plan <track> <file.json|->')
+    if (!args[0] || !args[1]) fail('usage: roadmap plan <track> <file.json|->')
     const input = parse(readFileSync(args[1] === '-' ? 0 : args[1], 'utf8'))
     if (!input || !Array.isArray(input.phases)) fail('the plan JSON needs "phases": [{ "name", "steps": [{ "id", "title", … }] }]')
-    const ids = new Set()
-    const text = v => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
-    const phases = input.phases.map(p => ({
-      name: String(p.name ?? ''),
-      steps: (Array.isArray(p.steps) ? p.steps : [])
-        .map(s => ({
-          id: String(s.id ?? '').trim(),
-          title: String(s.title ?? s.id ?? ''),
-          checkpoint: s.checkpoint === true ? true : undefined,
-          blockedBy: Array.isArray(s.blocked_by ?? s.blockedBy) ? (s.blocked_by ?? s.blockedBy).map(String) : undefined,
-          why: text(s.why),
-          scope: text(s.scope),
-          doneWhen: text(s.done_when ?? s.doneWhen),
-        }))
-        .filter(s => s.id && !ids.has(s.id) && ids.add(s.id)),
-    }))
-    const { events, lives } = load()
-    const planned = { kind: 'plan', at: Date.now(), session, track, title: text(input.title), phases, actor }
-    const would = model.fold([...events, planned], lives, Date.now())
-    const loop = model.findCycle(would.tracks)
-    if (loop) fail(`not laid out: blocked_by closes a loop, so none of these could ever start: ${loop.join(' → ')}`)
-    sessionEvent(events)
-    emit(planned)
-    heartbeat(`roadmap plan ${track}`)
-    process.stdout.write(`Track "${track}" laid out: ${phases.length} phases, ${ids.size} steps.\n`)
+    act(ctx => actions.planAction(ctx, { ...input, track: args[0] }), `roadmap plan ${args[0]}`)
     break
   }
-  case 'mark': {
-    const { events, b } = board()
-    const whole = /^#?([\w.-]+)\/\*$/.exec(String(args[0] ?? ''))
-    const priority = flags.priority === 'none' ? null : model.PRIORITIES.includes(flags.priority) ? flags.priority : undefined
-    const backlog = flags.backlog === undefined ? undefined : flags.backlog === 'true'
-    sessionEvent(events)
-    if (whole) {
-      const track = model.slug(whole[1])
-      if (!b.tracks.some(t => t.name === track)) fail(`no track "${track}"`)
-      if (priority === undefined && backlog === undefined) fail('a whole track takes --priority or --backlog')
-      emit({ kind: 'triage', at: Date.now(), session, track, priority, backlog, origin: 'agent' })
-      process.stdout.write(`${track}: triage recorded (the person's own choice stands over it).\n`)
-      break
-    }
-    const ref = resolve(b, args[0])
-    const status = args[1]
-    if (status !== undefined && (!model.STATUSES.includes(status) || status === 'awaiting')) {
-      fail('status is one of todo, running, done, failed, blocked, skipped')
-    }
-    if (status === 'skipped' && !(typeof flags.reason === 'string' && flags.reason.trim())) {
-      fail('a skip needs --reason "why this step will not be done"')
-    }
-    if (status === undefined && priority === undefined && backlog === undefined) fail('give a status, --priority or --backlog')
-    if (priority !== undefined || backlog !== undefined) {
-      emit({ kind: 'triage', at: Date.now(), session, track: ref.track, id: ref.id, priority, backlog, origin: 'agent' })
-    }
-    if (status) {
-      emit({
-        kind: 'step',
-        at: Date.now() + 1,
-        session,
-        track: ref.track,
-        id: ref.id,
-        status,
-        evidence: flags.evidence,
-        note: flags.note,
-        reason: typeof flags.reason === 'string' ? flags.reason.trim() : undefined,
-        origin: 'agent',
-        actor,
-      })
-    }
-    const after = board().b.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
-    heartbeat(`roadmap mark ${ref.track}/${ref.id}`, status === 'running' ? `${ref.track}/${ref.id}` : undefined)
-    process.stdout.write(
-      `${ref.track}/${ref.id} → ${after?.status === 'awaiting' && after.proposed === 'skipped' ? 'skip proposed' : after?.status}${after?.status === 'awaiting' ? ' (waits for the person to confirm)' : ''}` +
-        `${after?.priority ? ` · ${after.priority}` : ''}${after?.backlog ? ' · in backlog' : ''}\n`,
+  case 'mark':
+    act(
+      ctx =>
+        actions.markAction(ctx, {
+          step: args[0],
+          status: args[1],
+          evidence: flags.evidence,
+          note: flags.note,
+          reason: flags.reason,
+          priority: flags.priority,
+          backlog: flags.backlog,
+        }),
+      `roadmap mark ${args[0] ?? ''}`,
     )
     break
-  }
-  case 'done': {
-    const { events, b } = board()
-    const ref = resolve(b, args[0])
-    const shipped = String(flags.shipped ?? '').trim()
-    if (!shipped) fail('--shipped "what was delivered" is required')
-    sessionEvent(events)
-    emit({
-      kind: 'step',
-      at: Date.now(),
-      session,
-      track: ref.track,
-      id: ref.id,
-      status: flags.failed ? 'failed' : 'done',
-      note: shipped,
-      evidence: flags.evidence,
-      origin: 'agent',
-      actor,
-    })
-    const added = []
-    for (const raw of [].concat(flags['follow-up'] ?? [])) {
-      const m = /^(.*?)(?::(P[0-3]))?$/.exec(String(raw))
-      const name = (m?.[1] ?? '').trim()
-      if (!name) continue
-      const { events: now } = load()
-      const track = model.fold(now, [], Date.now()).tracks.find(t => t.name === ref.track)
-      const id = model.nextId(track, now, 'f')
-      const at = Date.now()
-      emit({ kind: 'add', at, session, track: ref.track, id, title: name, phase: model.FOLLOW_UPS, origin: 'agent' })
-      emit({ kind: 'triage', at: at + 1, session, track: ref.track, id, backlog: true, priority: m?.[2], origin: 'agent' })
-      added.push(`${ref.track}/${id} ${name}`)
-    }
-    const after = board().b.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
-    heartbeat(`roadmap done ${ref.track}/${ref.id}`, `${ref.track}/${ref.id}`)
-    process.stdout.write(`${ref.track}/${ref.id} → ${after?.status}${after?.status === 'awaiting' ? ' (waits for the person to confirm)' : ''}\n`)
-    if (added.length) process.stdout.write(`Follow-ups set aside in the backlog:\n${added.map(x => `- ${x}`).join('\n')}\n`)
+  case 'done':
+    act(
+      ctx =>
+        actions.doneAction(ctx, {
+          step: args[0],
+          shipped: flags.shipped,
+          evidence: flags.evidence,
+          status: flags.failed ? 'failed' : 'done',
+          follow_ups: [].concat(flags['follow-up'] ?? []).map(raw => {
+            const m = /^(.*?)(?::(P[0-3]))?$/.exec(String(raw))
+            return { title: (m?.[1] ?? '').trim(), priority: m?.[2] }
+          }),
+        }),
+      `roadmap done ${args[0] ?? ''}`,
+    )
     break
-  }
   default:
     process.stdout.write(
       readFileSync(new URL(import.meta.url), 'utf8')

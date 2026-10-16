@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { doneAction, markAction, planAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
 import { FOLLOW_UPS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
@@ -1010,4 +1011,39 @@ test('Copy puts a track title, or a step as "#track/id title", on the clipboard 
   expect(copied.at(-1)).toBe('#api/1.2 Pagination')
   expect(await ui.find({ text: /Map endpoints/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('the shared actions hold the rules once, for the Claude tools and the CLI alike', async () => {
+  const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 5000, session: 's1', actor: 'codex', ...extra })
+  const laid = planAction(ctx([]), {
+    track: 'API',
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'A', done_when: 'tests green' }, { id: '2', title: 'B', blocked_by: ['1'] }] }],
+  })
+  expect(laid.ok).toBe(true)
+  expect(laid.emit[0]?.kind).toBe('plan')
+  expect(laid.track).toBe('api')
+  const events = laid.emit
+
+  const loop = planAction(ctx(events), { track: 'x', phases: [{ name: 'P', steps: [{ id: 'a', title: 'A', blocked_by: ['a'] }] }] })
+  expect(loop.ok).toBe(false)
+  expect(loop.emit.length).toBe(0)
+
+  expect(markAction(ctx(events), { step: 'api/1', status: 'skipped' }).ok).toBe(false)
+  const running = markAction(ctx(events), { step: 'api/1', status: 'running' })
+  expect(running.focus).toBe('api/1')
+  expect((running.emit[0] as { actor?: string }).actor).toBe('codex')
+
+  const read = stepAction(ctx(events), { step: 'api/1' })
+  expect(read.text).toContain('Done when: tests green')
+  expect(read.focus).toBe('api/1')
+  expect(stepAction(ctx(events, { focus: 'api/2' }), { step: 'api/1' }).focus).toBe(undefined)
+
+  const done = doneAction(ctx(events), { step: 'api/1', shipped: 'A', follow_ups: [{ title: 'F1', priority: 'P2' }, { title: 'F2' }] })
+  expect(done.emit.filter(e => e.kind === 'add').length).toBe(2)
+  expect(done.emit.filter(e => e.kind === 'triage').every(e => (e as { backlog?: boolean }).backlog)).toBe(true)
+  expect(doneAction(ctx(events), { step: 'api/1' }).ok).toBe(false)
+
+  const whole = markAction(ctx(events), { step: 'api/*', priority: 'P1' })
+  expect(whole.ok).toBe(true)
+  expect((whole.emit[0] as { id?: string }).id).toBe(undefined)
 })

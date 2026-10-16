@@ -10,25 +10,18 @@ import type {
 } from '../types'
 import {
   LIVE_MS,
-  attention,
   STATUSES,
   describeCall,
-  duration,
   fold,
-  parseRef,
   progress,
   refInText,
-  slug,
   summary,
-  FOLLOW_UPS,
-  PRIORITIES,
   boardMarkdown,
-  brief,
-  findCycle,
-  nextId,
   nextPersonId,
   trackMarkdown,
 } from './model'
+import { doneAction, markAction, planAction, statusAction, stepAction } from './actions'
+import type { ActionContext, ActionResult } from './actions'
 import { drawBand, drawPane } from './view'
 import type { RoadmapView } from './view'
 
@@ -368,6 +361,37 @@ async function personSkip($: EngineInterface, track: string, id: string, reason:
   $.ui.toast(`↷ ${track}/${id} skipped`)
 }
 
+/**
+ * The tools are thin: read the journal, run the shared action (actions.ts; the CLI runs the same),
+ * append what it returns, and follow up in this chat (focus, track, toast).
+ */
+async function act($: EngineInterface, run: (ctx: ActionContext) => ActionResult): Promise<{ result: string }> {
+  await sync($).catch(() => undefined)
+  const r = run({
+    events: journal.events,
+    lives: [...journal.lives.values()].map(l => l.live),
+    now: Date.now(),
+    session: journal.me,
+    actor: 'claude',
+    track: journal.track,
+    focus: journal.focus,
+  })
+  if (!r.ok) return { result: r.text }
+  for (const ev of r.emit) await emit($, ev)
+  if (r.emit.length === 0) await republish($)
+  if (r.track) journal.track = r.track
+  if (r.focus) await setFocus($, r.focus)
+  if (r.toast) $.ui.toast(r.toast)
+  return { result: r.text }
+}
+
+/** Lays out a track, then shows the pane. */
+async function actPlan($: EngineInterface, input: Record<string, unknown>): Promise<{ result: string }> {
+  const out = await act($, ctx => planAction(ctx, input))
+  void openPane($).catch(() => undefined)
+  return out
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
@@ -612,200 +636,11 @@ export const register: Register = on => {
     return { text: 'Roadmap toggled (`/roadmap show` / `/roadmap hide`).' }
   })
 
-  on('tool.call', { tool: TOOL_PLAN }, async ($, e) => {
-    const track = slug(String(e.track ?? ''))
-    if (!track) return { result: 'A track name is required (e.g. "api").' }
-    const raw = Array.isArray(e.phases) ? (e.phases as { name?: unknown; steps?: unknown }[]) : []
-    const ids = new Set<string>()
-    const phases = raw.map(p => ({
-      name: String(p.name ?? ''),
-      steps: (Array.isArray(p.steps) ? (p.steps as { id?: unknown; title?: unknown }[]) : [])
-        .map(s => {
-          const raw = s as {
-            checkpoint?: unknown
-            blocked_by?: unknown
-            blockedBy?: unknown
-            why?: unknown
-            scope?: unknown
-            done_when?: unknown
-            doneWhen?: unknown
-          }
-          const deps = raw.blocked_by ?? raw.blockedBy
-          const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
-          return {
-            id: String(s.id ?? '').trim(),
-            title: String(s.title ?? s.id ?? ''),
-            checkpoint: raw.checkpoint === true ? true : undefined,
-            blockedBy: Array.isArray(deps) && deps.length ? deps.map(String) : undefined,
-            why: text(raw.why),
-            scope: text(raw.scope),
-            doneWhen: text(raw.done_when ?? raw.doneWhen),
-          }
-        })
-        .filter(s => s.id && !ids.has(s.id) && ids.add(s.id)),
-    }))
-    const planned: RoadmapEvent = {
-      kind: 'plan',
-      at: Date.now(),
-      session: journal.me,
-      track,
-      title: e.title === undefined ? undefined : String(e.title),
-      phases,
-      actor: 'claude',
-    }
-    // Refuse a layout whose dependencies close a loop: nothing in it could ever start.
-    await sync($).catch(() => undefined)
-    const would = fold([...journal.events, planned], [], Date.now())
-    const loop = findCycle(would.tracks)
-    if (loop) {
-      return { result: `Not laid out: blocked_by closes a loop, so none of these could ever start: ${loop.join(' → ')}. Break one link and lay the track out again.` }
-    }
-    const known = new Set(would.tracks.flatMap(t => t.steps.map(x => `${t.name}/${x.id}`)))
-    const dangling = [...new Set(would.tracks.find(t => t.name === track)?.steps.flatMap(x => x.blockedBy.filter(r => !known.has(r))) ?? [])]
-    journal.track = track
-    await emit($, planned)
-    void openPane($).catch(() => undefined)
-    const warn = dangling.length ? ` Note: blocked_by names steps that do not exist (yet): ${dangling.join(', ')}.` : ''
-    return { result: `Track "${track}" laid out: ${phases.length} phases, ${ids.size} steps.${warn}` }
-  })
-
-  on('tool.call', { tool: TOOL_MARK }, async ($, e) => {
-    const status =
-      STATUSES.includes(e.status as RoadmapStatus) && e.status !== 'awaiting' ? (e.status as RoadmapStatus) : undefined
-    const priority =
-      e.priority === 'none' ? null : PRIORITIES.includes(e.priority as RoadmapPriority) ? (e.priority as RoadmapPriority) : undefined
-    const backlog = typeof e.backlog === 'boolean' ? e.backlog : undefined
-    if (e.status !== undefined && !status) return { result: `Unknown status; use one of ${STATUSES.join(', ')}.` }
-    if (!status && priority === undefined && backlog === undefined) {
-      return { result: 'Give a status, a priority (P0…P3 or none) or backlog (true/false).' }
-    }
-    const reason = typeof e.reason === 'string' && e.reason.trim() ? e.reason.trim() : undefined
-    if (status === 'skipped' && !reason) {
-      return { result: 'A skip needs a reason: why will this step not be done? Pass `reason`.' }
-    }
-    await sync($).catch(() => undefined)
-    const now = fold(journal.events, [], Date.now())
-    const whole = String(e.step ?? '').match(/^#?([\w.-]+)\/\*$/)
-    if (whole) {
-      const name = slug(whole[1] ?? '')
-      if (!now.tracks.some(t => t.name === name)) return { result: `No track "${name}".` }
-      if (status) return { result: 'A whole track takes a priority or backlog, not a status.' }
-      if (priority === undefined && backlog === undefined) return { result: 'Give a priority or backlog for the track.' }
-      await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track: name, priority, backlog, origin: 'agent' })
-      const t = (await read($, board)).tracks.find(x => x.name === name)
-      const kept = t?.triagedBy === 'you' ? ' (the person\'s own choice stands)' : ''
-      return { result: `${name}: priority ${t?.priority ?? 'none'}, ${t?.backlog ? 'in backlog' : 'active'}${kept}.` }
-    }
-    const ref = parseRef(String(e.step ?? ''), now.tracks, journal.track)
-    const track = ref && now.tracks.find(t => t.name === ref.track)
-    if (!ref || !track?.steps.some(s => s.id === ref.id)) {
-      return { result: `No step "${String(e.step)}". Known:\n${summary(now, { open: 50 })}` }
-    }
-    journal.track = ref.track
-    if (priority !== undefined || backlog !== undefined) {
-      await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track: ref.track, id: ref.id, priority, backlog, origin: 'agent' })
-    }
-    if (!status) {
-      const t = (await read($, board)).tracks.find(x => x.name === ref.track)?.steps.find(x => x.id === ref.id)
-      const kept = t && t.triagedBy === 'you' ? ' (the person\'s own choice stands)' : ''
-      return { result: `${ref.track}/${ref.id}: priority ${t?.priority ?? 'none'}, ${t?.backlog ? 'in backlog' : 'active'}${kept}.` }
-    }
-    if (status === 'running') await setFocus($, `${ref.track}/${ref.id}`)
-    await emit($, {
-      kind: 'step',
-      at: Date.now(),
-      session: journal.me,
-      track: ref.track,
-      id: ref.id,
-      status,
-      note: e.note === undefined ? undefined : String(e.note),
-      evidence: e.evidence === undefined ? undefined : String(e.evidence),
-      reason,
-      origin: 'agent',
-      actor: 'claude',
-    })
-    const after = (await read($, board)).tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
-    if (after?.status === 'done') $.ui.toast(`✓ ${ref.track}/${ref.id}`)
-    if (after?.status === 'awaiting') $.ui.toast(`◆ ${ref.track}/${ref.id} awaits your confirmation`)
-    return {
-      result:
-        after?.status === 'awaiting' && after.proposed === 'skipped'
-          ? `${ref.track}/${ref.id} → skip proposed; the person confirms or rejects it in the Roadmap pane.`
-          : after?.status === 'awaiting'
-          ? `${ref.track}/${ref.id} → awaiting the person's confirmation (checkpoint or reopened after failure).`
-          : `${ref.track}/${ref.id} → ${after?.status ?? status}.`,
-    }
-  })
-
-  on('tool.call', { tool: TOOL_STEP }, async ($, e) => {
-    await sync($).catch(() => undefined)
-    const now = fold(journal.events, [], Date.now())
-    const ref = parseRef(String(e.step ?? ''), now.tracks, journal.track)
-    const live = fold(journal.events, [...journal.lives.values()].map(l => l.live), Date.now())
-    const text = ref && brief(live, ref.track, ref.id, journal.me)
-    if (!ref || !text) return { result: `No step "${String(e.step)}". Known:\n${summary(now, { open: 50 })}` }
-    // Reading a brief takes hold only when this chat holds nothing yet: looking up a dependency
-    // must not move the chat off its own item. Starting, finishing or pinning moves it.
-    if (!journal.focus) await setFocus($, `${ref.track}/${ref.id}`)
-    return { result: text }
-  })
-
-  on('tool.call', { tool: TOOL_DONE }, async ($, e) => {
-    await sync($).catch(() => undefined)
-    const now = fold(journal.events, [], Date.now())
-    const ref = parseRef(String(e.step ?? ''), now.tracks, journal.track)
-    const track = ref && now.tracks.find(t => t.name === ref.track)
-    if (!ref || !track?.steps.some(s => s.id === ref.id)) {
-      return { result: `No step "${String(e.step)}". Known:\n${summary(now, { open: 50 })}` }
-    }
-    const status: RoadmapStatus = e.status === 'failed' ? 'failed' : 'done'
-    const shipped = String(e.shipped ?? '').trim()
-    await setFocus($, `${ref.track}/${ref.id}`)
-    await emit($, {
-      kind: 'step',
-      at: Date.now(),
-      session: journal.me,
-      track: ref.track,
-      id: ref.id,
-      status,
-      note: shipped || undefined,
-      evidence: e.evidence === undefined ? undefined : String(e.evidence),
-      origin: 'agent',
-      actor: 'claude',
-    })
-    const raw = Array.isArray(e.follow_ups) ? (e.follow_ups as { title?: unknown; priority?: unknown }[]) : []
-    const added: string[] = []
-    for (const f of raw) {
-      const title = String(f.title ?? '').trim()
-      if (!title) continue
-      const fresh = fold(journal.events, [], Date.now()).tracks.find(t => t.name === ref.track)
-      if (!fresh) break
-      const id = nextId(fresh, journal.events, 'f')
-      const at = Date.now()
-      await emit($, { kind: 'add', at, session: journal.me, track: ref.track, id, title, phase: FOLLOW_UPS, origin: 'agent' })
-      const priority = PRIORITIES.includes(f.priority as RoadmapPriority) ? (f.priority as RoadmapPriority) : undefined
-      await emit($, { kind: 'triage', at: at + 1, session: journal.me, track: ref.track, id, backlog: true, priority, origin: 'agent' })
-      added.push(`${ref.track}/${id} ${title}`)
-    }
-    const after = (await read($, board)).tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
-    if (after?.status === 'done') $.ui.toast(`✓ ${ref.track}/${ref.id}`)
-    if (after?.status === 'awaiting') $.ui.toast(`◆ ${ref.track}/${ref.id} awaits your confirmation`)
-    const state =
-      after?.status === 'awaiting' ? 'awaiting the person\'s confirmation (checkpoint or reopened after failure)' : (after?.status ?? status)
-    const ups = added.length ? `\nFollow-ups set aside in the backlog for the person to schedule:\n${added.map(x => `- ${x}`).join('\n')}` : ''
-    return { result: `${ref.track}/${ref.id} → ${state}.${ups}` }
-  })
-
-  on('tool.call', { tool: TOOL_STATUS }, async $ => {
-    await sync($).catch(() => undefined)
-    await republish($)
-    const now = await read($, board)
-    const live = now.sessions.filter(s => s.isLive && s.id !== journal.me)
-    const others = live.length
-      ? `\nOther sessions working now:\n${live.map(s => `- ${s.title}${s.track ? ` [${s.track}]` : ''}${s.activity ? ` → ${s.activity}` : ''}`).join('\n')}`
-      : ''
-    return { result: summary(now, { open: 50 }) + others }
-  })
+  on('tool.call', { tool: TOOL_PLAN }, ($, e) => actPlan($, e as unknown as Record<string, unknown>))
+  on('tool.call', { tool: TOOL_MARK }, ($, e) => act($, ctx => markAction(ctx, e as unknown as Record<string, unknown>)))
+  on('tool.call', { tool: TOOL_DONE }, ($, e) => act($, ctx => doneAction(ctx, e as unknown as Record<string, unknown>)))
+  on('tool.call', { tool: TOOL_STEP }, ($, e) => act($, ctx => stepAction(ctx, e as unknown as Record<string, unknown>)))
+  on('tool.call', { tool: TOOL_STATUS }, $ => act($, ctx => statusAction(ctx)))
 
   // Live status: what this session and each of its agents is doing now.
   on('tool.call', async ($, e, next) => {

@@ -48,7 +48,7 @@ function shortTitle(text: string, max = 22): string {
 
 /** "This chat: ◐ api/2.4 One error format": the item this chat holds, first thing in its pane. */
 function thisChat(els: Els, d: PaneData) {
-  const { Box, Text, Button } = els
+  const { Box, Text } = els
   if (!d.focus) return null
   const [track, id] = [d.focus.split('/')[0] ?? '', d.focus.split('/').slice(1).join('/')]
   const t = d.board.tracks.find(x => x.name === track)
@@ -79,7 +79,7 @@ export function nextPriority(p: RoadmapPriority | undefined): RoadmapPriority | 
 const PRIO_COLOR: Record<RoadmapPriority, string> = { P0: 'error', P1: 'warning', P2: 'suggestion', P3: 'subtle' }
 
 function prioChip(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
-  const { Button, Text } = els
+  const { Text } = els
   return (
     Btn(els, d, { key: `prio-${t.name}/${s.id}`, plain: true, onPress: () => d.onPriority(t.name, s.id, nextPriority(s.priority)) }, s.priority ?? "P·", <Text>{s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>P·</Text>}</Text>)
   )
