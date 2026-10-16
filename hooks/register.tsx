@@ -59,6 +59,8 @@ const journal = {
   focus: undefined as string | undefined,
   activity: undefined as string | undefined,
   activeAt: 0,
+  /** Whether the engine draws styled content inside a Button: 2.1.295 on. Older ones take a plain label. */
+  richButtons: false,
   isOpened: false,
   /** Every event read, by its name (a loose file's name, or the name it had before it was archived). */
   seen: new Set<string>(),
@@ -82,6 +84,18 @@ function titleOf(text: string): string {
     .map(l => l.trim())
     .find(l => l.length > 0)
   return (line ?? 'pasted content').slice(0, 60)
+}
+
+/** `a` is at least `b`, comparing dotted release numbers (`2.1.295`); a dev suffix is ignored. */
+export function versionAtLeast(a: string, b: string): boolean {
+  const pa = a.split(/[^0-9.]/)[0]?.split('.').map(Number) ?? []
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < pb.length; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return x > y
+  }
+  return true
 }
 
 function rand(): string {
@@ -359,6 +373,8 @@ export const register: Register = on => {
     const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
     journal.dir = (await $.env.get('CLAUDE_ROADMAP_DIR')) ?? `${home}/.claude/roadmap`
     journal.me = await $.session.id()
+    const engine = await $.session.version().catch(() => undefined)
+    journal.richButtons = !!engine && versionAtLeast(engine.base ?? engine.version, '2.1.295')
     await update($, tzOffset, () => 0)
     void hostOffset($).then(min => update($, tzOffset, () => min)).catch(() => undefined)
     const band = await $.store.get('band').catch(() => undefined)
@@ -840,6 +856,7 @@ export const register: Register = on => {
     const tz = await read($, tzOffset)
     return drawPane(els, {
       board: await read($, board),
+      richButtons: journal.richButtons,
       view: (await read($, view)) as RoadmapView,
       expanded: await read($, expanded),
       now: Date.now(),
@@ -861,6 +878,11 @@ export const register: Register = on => {
         void (async () => {
           const done = await $.ui.copy({ text: boardMarkdown(await read($, board), Date.now(), tz), surface: surface as never })
           $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
+        })(),
+      onCopyText: (text, surface) =>
+        void (async () => {
+          const done = await $.ui.copy({ text, surface: surface as never })
+          $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
         })(),
       onDecide: (track, id, status) => void decide($, track, id, status),
       editing: await read($, editing),

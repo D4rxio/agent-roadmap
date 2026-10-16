@@ -19,6 +19,8 @@ export type PaneData = {
   onToggle: (track: string) => void
   onCopyTrack: (track: string, surface: string) => void
   onCopyAll: (surface: string) => void
+  /** Copies one line of text (a title, a step reference) to the clipboard. */
+  onCopyText: (text: string, surface: string) => void
   onDecide: (track: string, id: string, status: RoadmapStatus) => void
   /** `<track>/<id>` being renamed, or ''. */
   editing: string
@@ -36,6 +38,8 @@ export type PaneData = {
   onPin: (ref: string) => void
   /** The person skips a step, with the reason they gave. */
   onSkip: (track: string, id: string, reason: string) => void
+  /** Whether this engine draws styled content inside a Button (2.1.295 on). */
+  richButtons: boolean
 }
 
 function shortTitle(text: string, max = 22): string {
@@ -60,9 +64,7 @@ function thisChat(els: Els, d: PaneData) {
           {s ? `${d.focus}  ${s.title}` : t ? t.title : d.focus}
         </Text>
       </Box>
-      <Button key="unpin" plain onPress={() => d.onPin('')}>
-        <Text dimColor>Unpin</Text>
-      </Button>
+      {Btn(els, d, { key: "unpin", plain: true, onPress: () => d.onPin('') }, "Unpin", <Text><Text dimColor>Unpin</Text></Text>)}
     </Box>
   )
 }
@@ -79,9 +81,22 @@ const PRIO_COLOR: Record<RoadmapPriority, string> = { P0: 'error', P1: 'warning'
 function prioChip(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
   const { Button, Text } = els
   return (
-    <Button key={`prio-${t.name}/${s.id}`} plain onPress={() => d.onPriority(t.name, s.id, nextPriority(s.priority))}>
-      {s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>P·</Text>}
+    Btn(els, d, { key: `prio-${t.name}/${s.id}`, plain: true, onPress: () => d.onPriority(t.name, s.id, nextPriority(s.priority)) }, s.priority ?? "P·", <Text>{s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>P·</Text>}</Text>)
+  )
+}
+
+/**
+ * A Button with styled content where the engine draws it (2.1.295 on), and the same Button with its
+ * plain label on older engines, which take one string child only: the pane works on both.
+ */
+function Btn(els: Els, d: { richButtons: boolean }, props: Record<string, any>, label: string, rich: any) {
+  const { Button } = els
+  return d.richButtons ? (
+    <Button {...props} label={label}>
+      {rich}
     </Button>
+  ) : (
+    <Button {...props}>{label}</Button>
   )
 }
 
@@ -309,26 +324,19 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
     <Box key={`track-${t.name}`} flexDirection="column" marginBottom={1}>
       <Box flexDirection="row" gap={1}>
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Button key={`fold-${t.name}`} plain onPress={() => d.onToggle(t.name)}>
-            {`${isOpen ? '▾' : '▸'} `}
+          {Btn(els, d, { key: `fold-${t.name}`, plain: true, onPress: () => d.onToggle(t.name) }, `${isOpen ? '▾' : '▸'} ${t.title}`, <Text>{`${isOpen ? '▾' : '▸'} `}
             <Text bold color={done === total && total > 0 ? 'success' : undefined}>
               {t.title}
-            </Text>
-          </Button>
+            </Text></Text>)}
         </Box>
         <Box flexDirection="row" display={d.canDraw ? 'none' : 'flex'} hover={d.canDraw ? { display: 'flex' } : undefined}>
-          <Button key={`tshelve-${t.name}`} plain onPress={() => d.onTrackBacklog(t.name, !t.backlog)}>
-            <Text dimColor>{t.backlog ? '' : 'Backlog'}</Text>
-          </Button>
+          {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => d.onCopyText(t.title, press?.surface ?? 'desktop') }, 'Copy', <Text><Text dimColor>Copy</Text></Text>)}
+          {Btn(els, d, { key: `tshelve-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, !t.backlog) }, "Backlog", <Text><Text dimColor>{t.backlog ? '' : 'Backlog'}</Text></Text>)}
         </Box>
         {t.backlog ? (
-          <Button key={`trestore-${t.name}`} plain onPress={() => d.onTrackBacklog(t.name, false)}>
-            <Text color="suggestion">↺ Restore</Text>
-          </Button>
+          Btn(els, d, { key: `trestore-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, false) }, "Restore", <Text><Text color="suggestion">↺ Restore</Text></Text>)
         ) : null}
-        <Button key={`tprio-${t.name}`} plain onPress={() => d.onTrackPriority(t.name, nextPriority(t.priority))}>
-          {t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>P·</Text>}
-        </Button>
+        {Btn(els, d, { key: `tprio-${t.name}`, plain: true, onPress: () => d.onTrackPriority(t.name, nextPriority(t.priority)) }, t.priority ?? "P·", <Text>{t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>P·</Text>}</Text>)}
         <Text bold>{`${pct}%`}</Text>
         <Text dimColor>{`${done}/${total}`}</Text>
       </Box>
@@ -429,9 +437,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
   const right = stepRight(s, d)
   return (
     <Box key={`step-${ref}`} flexDirection="row" gap={1}>
-      <Button key={`cycle-${ref}`} plain onPress={() => d.onCycle(t.name, s.id, nextStatus(s.status))}>
-        <Text color={COLOR[s.status]}>{ICONS[s.status]}</Text>
-      </Button>
+      {Btn(els, d, { key: `cycle-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, nextStatus(s.status)) }, ICONS[s.status], <Text><Text color={COLOR[s.status]}>{ICONS[s.status]}</Text></Text>)}
       {prioChip(els, d, t, s)}
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text wrap="truncate-end" dimColor={s.status === 'done' || s.status === 'skipped' || s.backlog}>
@@ -455,9 +461,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
         </Text>
       ) : null}
       {s.backlog ? (
-        <Button key={`shelve-${ref}`} plain onPress={() => d.onBacklog(t.name, s.id, false)}>
-          <Text color="suggestion">↺ Restore</Text>
-        </Button>
+        Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: () => d.onBacklog(t.name, s.id, false) }, s.backlog ? "Restore" : "Backlog", <Text><Text color="suggestion">↺ Restore</Text></Text>)
       ) : null}
       {/* Row actions stay out of sight until the pointer is on the row (desktop); the terminal shows them. */}
       <Box
@@ -466,30 +470,31 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
         display={d.canDraw ? 'none' : 'flex'}
         hover={d.canDraw ? { display: 'flex' } : undefined}
       >
+        {s.status !== 'done' && s.status !== 'skipped' ? (
+          // The person's own word: it also closes a checkpoint or a step awaiting confirmation.
+          Btn(els, d, { key: `done-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, 'done') }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
+        ) : null}
+        {Btn(
+          els,
+          d,
+          { key: `scopy-${ref}`, plain: true, onPress: (press: any) => d.onCopyText(`#${ref} ${s.title}`, press?.surface ?? 'desktop') },
+          'Copy',
+          <Text><Text dimColor>Copy</Text></Text>,
+        )}
         {d.focus !== ref ? (
-          <Button key={`pin-${ref}`} plain onPress={() => d.onPin(ref)}>
-            <Text dimColor>Pin</Text>
-          </Button>
+          Btn(els, d, { key: `pin-${ref}`, plain: true, onPress: () => d.onPin(ref) }, "Pin", <Text><Text dimColor>Pin</Text></Text>)
         ) : null}
         {s.status !== 'skipped' && s.status !== 'done' && els.Input ? (
-          <Button key={`skipit-${ref}`} plain onPress={() => d.onStartEdit(`skip:${ref}`)}>
-            <Text dimColor>Skip</Text>
-          </Button>
+          Btn(els, d, { key: `skipit-${ref}`, plain: true, onPress: () => d.onStartEdit(`skip:${ref}`) }, "Skip", <Text><Text dimColor>Skip</Text></Text>)
         ) : null}
         {!s.backlog ? (
-          <Button key={`shelve-${ref}`} plain onPress={() => d.onBacklog(t.name, s.id, true)}>
-            <Text dimColor>Backlog</Text>
-          </Button>
+          Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: () => d.onBacklog(t.name, s.id, true) }, s.backlog ? "Restore" : "Backlog", <Text><Text dimColor>Backlog</Text></Text>)
         ) : null}
         {s.addedBy ? (
-          <Button key={`rename-${ref}`} plain onPress={() => d.onStartEdit(ref)}>
-            <Text dimColor>✎</Text>
-          </Button>
+          Btn(els, d, { key: `rename-${ref}`, plain: true, onPress: () => d.onStartEdit(ref) }, "Rename", <Text><Text dimColor>✎</Text></Text>)
         ) : null}
         {s.addedBy ? (
-          <Button key={`remove-${ref}`} plain onPress={() => d.onRemove(t.name, s.id)}>
-            <Text dimColor>✕</Text>
-          </Button>
+          Btn(els, d, { key: `remove-${ref}`, plain: true, onPress: () => d.onRemove(t.name, s.id) }, "Remove", <Text><Text dimColor>✕</Text></Text>)
         ) : null}
       </Box>
     </Box>

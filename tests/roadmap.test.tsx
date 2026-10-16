@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
+import { versionAtLeast } from '../hooks/register'
+
 import { FOLLOW_UPS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
@@ -910,5 +912,102 @@ test('from the tool and the pane: a skip needs a reason; the person confirms a p
   // Clicking a skipped step's icon brings it back.
   await ui.press({ key: 'cycle-api/1.2' })
   expect(await ui.find({ text: /skipped: out of scope/ })).toBe(undefined)
+  await ui.unmount()
+})
+
+test('engine versions compare by release, a dev suffix ignored', async () => {
+  expect(versionAtLeast('2.1.295', '2.1.295')).toBe(true)
+  expect(versionAtLeast('2.1.300-dev.20261020.t1.sha1', '2.1.295')).toBe(true)
+  expect(versionAtLeast('2.1.287', '2.1.295')).toBe(false)
+  expect(versionAtLeast('3.0.0', '2.1.295')).toBe(true)
+})
+
+test('Done ✓ marks a step completed in one press, a checkpoint included; done steps offer no Done', async ($, on) => {
+  const cp = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Build' }, { id: '2', title: 'Ship', checkpoint: true }] }],
+  }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(cp)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-thirteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'fold-api' })
+    if (surface === 'terminal') {
+      await ui.press({ key: 'done-api/1' })
+      expect(await ui.find({ text: /50%/ })).toBeDefined()
+      await ui.press({ key: 'done-api/2' })
+      expect(await ui.find({ text: /100%/ })).toBeDefined()
+      expect(await ui.find({ key: 'done-api/1' })).toBe(undefined)
+    } else {
+      expect(await ui.find({ text: /100%/ })).toBeDefined()
+    }
+    await ui.unmount()
+  }
+})
+
+test('Copy puts a track title, or a step as "#track/id title", on the clipboard without folding', async ($, on) => {
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(PLAN)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  const copied: string[] = []
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.copy', (_$, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true } }
+  })
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-fourteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tcopy-api' })
+  expect(copied.at(-1)).toBe('API v2')
+  expect(await ui.find({ text: /Map endpoints/ })).toBe(undefined)
+  await ui.press({ key: 'fold-api' })
+  await ui.press({ key: 'scopy-api/1.2' })
+  expect(copied.at(-1)).toBe('#api/1.2 Pagination')
+  expect(await ui.find({ text: /Map endpoints/ })).toBeDefined()
   await ui.unmount()
 })
