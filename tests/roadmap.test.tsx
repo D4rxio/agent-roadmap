@@ -1047,3 +1047,57 @@ test('the shared actions hold the rules once, for the Claude tools and the CLI a
   expect(whole.ok).toBe(true)
   expect((whole.emit[0] as { id?: string }).id).toBe(undefined)
 })
+
+test('no truncating Text holds styled Texts: every row stays one line, so scrolling stays right', async ($, on) => {
+  const files = new Map<string, { text: string; mtimeMs: number }>()
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, { text: e.text, mtimeMs: Date.now() })
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path)?.text ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: files.get(`${e.path}/${name}`)?.mtimeMs ?? 0, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-fifteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  const dir = '/home/t/.claude/roadmap'
+  const long = 'A very long step title that would wrap onto three lines in a narrow pane if it were allowed to'
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    phases: [{ name: 'P', steps: [{ id: '1', title: long }, { id: '2', title: long, blockedBy: ['1', 'web/9', 'docs/3'] }] }],
+  }
+  files.set(`${dir}/events/1000-o-x.json`, { text: JSON.stringify(plan), mtimeMs: 1000 })
+  files.set(`${dir}/live/other.json`, {
+    text: JSON.stringify({ session: 'other', title: 'a chat with a long title as well', at: Date.now(), agents: [], focus: 'api/1' }),
+    mtimeMs: Date.now(),
+  })
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  await $.tool.call({ tool: 'mcp__roadmap__mark', step: 'api/1', status: 'running' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const texts = await ui.findAll({ type: 'Text' })
+  const nested = texts.filter(
+    t =>
+      String(t.props.wrap ?? '').startsWith('truncate') &&
+      t.children.some(c => typeof c === 'object' && c !== null && (c as { type?: string }).type === 'Text'),
+  )
+  expect(nested.map(t => t.text)).toEqual([])
+  expect(await ui.find({ text: /● this chat/ })).toBeDefined()
+  expect(await ui.find({ text: /● a chat with a long ti…/ })).toBeDefined()
+  await ui.unmount()
+})

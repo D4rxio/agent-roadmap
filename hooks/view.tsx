@@ -42,6 +42,36 @@ export type PaneData = {
   richButtons: boolean
 }
 
+type Part = { text: string; color?: string; dim?: boolean; bold?: boolean; strike?: boolean; main?: boolean }
+
+/**
+ * One line that never wraps. A Text holding styled Texts inside is wrapped by graphical surfaces even
+ * with a truncating wrap, and a wrapped row breaks the pane's scrolling (it counts one row per line).
+ * So each styled piece is its own Text: fixed parts keep their width, the main part is cut with "…".
+ */
+function Line(els: Els, key: string, parts: Part[]) {
+  const { Box, Text } = els
+  return (
+    <Box key={key} flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+      {parts.map((p, i) =>
+        p.main ? (
+          <Box key={`${key}-main`} flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+            <Text wrap="truncate-end" color={p.color} dimColor={p.dim} bold={p.bold} strikethrough={p.strike}>
+              {p.text}
+            </Text>
+          </Box>
+        ) : (
+          <Box key={`${key}-${i}`} flexShrink={0}>
+            <Text color={p.color} dimColor={p.dim} bold={p.bold}>
+              {p.text}
+            </Text>
+          </Box>
+        ),
+      )}
+    </Box>
+  )
+}
+
 function shortTitle(text: string, max = 22): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
@@ -58,12 +88,10 @@ function thisChat(els: Els, d: PaneData) {
       <Text color="warning" bold>
         This chat
       </Text>
-      <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text wrap="truncate-end">
-          {s ? <Text color={COLOR[s.status]}>{`${ICONS[s.status]} `}</Text> : null}
-          {s ? `${d.focus}  ${s.title}` : t ? t.title : d.focus}
-        </Text>
-      </Box>
+      {Line(els, 'this-chat-line', [
+        ...(s ? [{ text: `${ICONS[s.status]} `, color: COLOR[s.status] }] : []),
+        { text: s ? `${d.focus}  ${s.title}` : t ? t.title : d.focus, main: true },
+      ])}
       {Btn(els, d, { key: "unpin", plain: true, onPress: () => d.onPin('') }, "Unpin", <Text><Text dimColor>Unpin</Text></Text>)}
     </Box>
   )
@@ -210,9 +238,11 @@ function Row(els: Els, key: string, left: any, right?: string, rightColor?: stri
         {left}
       </Box>
       {right ? (
-        <Text dimColor={!rightColor} color={rightColor} wrap="truncate-end">
-          {right}
-        </Text>
+        <Box flexShrink={2} minWidth={0} overflow="hidden">
+          <Text dimColor={!rightColor} color={rightColor} wrap="truncate-end">
+            {right}
+          </Text>
+        </Box>
       ) : null}
     </Box>
   )
@@ -267,10 +297,10 @@ function needsYou(els: Els, d: PaneData) {
       </Box>
       {needs.awaiting.map(st => (
         <Box key={`await-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
-          <Text wrap="truncate-end">
-            <Text color="permission">◆ </Text>
-            {`${titleOf(st.track)} · ${st.id} ${st.title}`}
-          </Text>
+          {Line(els, `await-line-${st.track}-${st.id}`, [
+            { text: '◆ ', color: 'permission' },
+            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+          ])}
           {st.proposed === 'skipped' ? (
             <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.evidence || st.lastBy ? (
@@ -439,26 +469,24 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
     <Box key={`step-${ref}`} flexDirection="row" gap={1}>
       {Btn(els, d, { key: `cycle-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, nextStatus(s.status)) }, ICONS[s.status], <Text><Text color={COLOR[s.status]}>{ICONS[s.status]}</Text></Text>)}
       {prioChip(els, d, t, s)}
-      <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text wrap="truncate-end" dimColor={s.status === 'done' || s.status === 'skipped' || s.backlog}>
-          <Text strikethrough={s.status === 'skipped'}>{`${s.id}  ${s.title}`}</Text>
-          {s.addedBy ? <Text color="suggestion">{'  ✎ you'}</Text> : null}
-          {d.focus === ref ? <Text color="warning">{'  ● this chat'}</Text> : null}
-          {d.board.sessions
-            .filter(x => x.isLive && x.focus === ref && x.id !== d.me)
-            .map(x => (
-              <Text key={`held-${ref}-${x.id}`} color="subtle">{`  ● ${shortTitle(x.title)}`}</Text>
-            ))}
-        </Text>
-      </Box>
+      {Line(els, `title-${ref}`, [
+        { text: `${s.id}  ${s.title}`, main: true, dim: s.status === 'done' || s.status === 'skipped' || s.backlog, strike: s.status === 'skipped' },
+        ...(s.addedBy ? [{ text: '  ✎ you', color: 'suggestion' }] : []),
+        ...(d.focus === ref ? [{ text: '  ● this chat', color: 'warning' }] : []),
+        ...d.board.sessions
+          .filter(x => x.isLive && x.focus === ref && x.id !== d.me)
+          .map(x => ({ text: `  ● ${shortTitle(x.title)}`, color: 'subtle' })),
+      ])}
       {right ? (
-        <Text
-          dimColor={s.status !== 'awaiting'}
-          color={s.status === 'awaiting' ? 'permission' : undefined}
-          wrap="truncate-end"
-        >
-          {right}
-        </Text>
+        <Box flexShrink={2} minWidth={0} overflow="hidden">
+          <Text
+            dimColor={s.status !== 'awaiting'}
+            color={s.status === 'awaiting' ? 'permission' : undefined}
+            wrap="truncate-end"
+          >
+            {right}
+          </Text>
+        </Box>
       ) : null}
       {s.backlog ? (
         Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: () => d.onBacklog(t.name, s.id, false) }, s.backlog ? "Restore" : "Backlog", <Text><Text color="suggestion">↺ Restore</Text></Text>)
@@ -513,10 +541,10 @@ function liveSection(els: Els, d: PaneData) {
         Row(
           els,
           `s-${s.id}`,
-          <Text wrap="truncate-end">
-            <Text color="warning">● </Text>
-            {`${s.title}${s.id === d.me ? ' (this)' : ''}`}
-          </Text>,
+          Line(els, `s-line-${s.id}`, [
+            { text: '● ', color: 'warning' },
+            { text: `${s.title}${s.id === d.me ? ' (this)' : ''}`, main: true },
+          ]),
           s.activity ? `→ ${s.activity}` : s.track,
         ),
       )}
@@ -524,10 +552,10 @@ function liveSection(els: Els, d: PaneData) {
         Row(
           els,
           `a-${a.id}`,
-          <Text wrap="truncate-end">
-            <Text color="warning">{'  ◐ '}</Text>
-            {a.description}
-          </Text>,
+          Line(els, `a-line-${a.id}`, [
+            { text: '  ◐ ', color: 'warning' },
+            { text: a.description, main: true },
+          ]),
           [a.step ? `${a.track}/${a.step}` : '', a.activity ? `→ ${a.activity}` : `${duration(d.now - a.startedAt)}`]
             .filter(Boolean)
             .join(' · '),
@@ -580,10 +608,10 @@ function daysView(els: Els, d: PaneData) {
               Row(
                 els,
                 `de-${day.day}-${i}`,
-                <Text wrap="truncate-end" dimColor={x.kind === 'started'}>
-                  <Text color={KIND[x.kind]?.color}>{`${KIND[x.kind]?.icon ?? '·'} `}</Text>
-                  {x.text}
-                </Text>,
+                Line(els, `de-line-${day.day}-${i}`, [
+                  { text: `${KIND[x.kind]?.icon ?? '·'} `, color: KIND[x.kind]?.color },
+                  { text: x.text, main: true, dim: x.kind === 'started' },
+                ]),
                 when(x.at, d.now, d.tz),
               ),
             )}
@@ -679,11 +707,11 @@ export function drawBand(
       </Button>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         {held ? (
-          <Text wrap="truncate-end">
-            <Text color="warning">this chat </Text>
-            <Text color={COLOR[held.status]}>{`${ICONS[held.status]} `}</Text>
-            {`${d.focus}  ${held.title}`}
-          </Text>
+          Line(els, 'band-line', [
+            { text: 'this chat ', color: 'warning' },
+            { text: `${ICONS[held.status]} `, color: COLOR[held.status] },
+            { text: `${d.focus}  ${held.title}`, main: true },
+          ])
         ) : (
           <Text dimColor wrap="truncate-end">
             {tracks || 'no tracks yet'}
