@@ -3,6 +3,33 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-10-16
+
+### Added
+- **Done ✓ on hover**: one press marks a step completed (the person's word, so it also closes a
+  checkpoint or a step awaiting confirmation). Before, it took two clicks on the step's icon.
+- **Collapsible phases**: a phase with work left (or holding this chat's step) starts open, a finished
+  one (everything done or skipped) starts closed; click a phase's header to open or close it, and this
+  chat remembers the choice.
+- **Copy on hover**: a track header's **Copy** copies its title without folding it; a step's **Copy**
+  copies `#<track>/<id> <title>`, ready to paste into a prompt or a subagent's description.
+
+### Fixed
+- **Long rows wrapped and scrolling cut off half the pane.** A row whose title carried styled parts
+  (an icon, a strikethrough, “✎ you”, “● this chat”) wrapped onto several lines on the desktop surface
+  despite truncation, while the pane counts one line per row, so scrolling a long list left half the
+  view blank. Every row is now one line: styled parts sit side by side and only the title is cut with
+  “…”. A test guards it.
+- **The pane failed to draw on Claude Code before 2.1.295.** Those engines accept only a plain string
+  inside a Button; ours carried styled text, so the pane was refused (found by Codex running the tests
+  with an older `claude`). Buttons now carry a label and draw styled content only where the engine
+  supports it (version checked at session start); the suite passes on 2.1.287 and 2.1.295.
+
+### Changed
+- **One action core.** Laying out a plan, marking, finishing, reading a step and the status now live in
+  `hooks/actions.ts`, run by both the Claude Code tools and the CLI; the two are thin I/O layers. A rule
+  change is one edit and one test, and Claude and other agents behave the same by construction.
+
 ## [0.2.0] — 2026-10-15
 
 ### Added
@@ -48,5 +75,6 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
+[0.3.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.2.0
 [0.1.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.1.0

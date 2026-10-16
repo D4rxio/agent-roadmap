@@ -14,13 +14,13 @@ what happened across five chats, and a fresh session knows where things stand.
 <p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: tracks with progress bars and priorities, a checkpoint awaiting confirmation, steps with their state, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
-## What's new in 0.2.0
+## What's new in 0.3.0
 
-- **Step briefs** — `why`, `scope` and `done_when` on every step; an agent reads them before it starts.
-- **Hand-off with follow-ups** — `roadmap done` records what shipped and files follow-ups in the backlog.
-- **Skipped, with a reason** — say a step will not be done; it stops counting and stops blocking.
-- **Each chat holds its item** — see at a glance which chat works on which step.
-- **CLI for any agent** — Codex and scripts share the same roadmap from a terminal.
+- **Done ✓ and Copy on hover** — finish a step in one press; copy a track title or `#track/id title`.
+- **Collapsible phases** — phases with work left start open, finished ones start closed.
+- **Long lists scroll cleanly** — every row is one line, cut with "…" instead of wrapping.
+- **Works on older Claude Code** — the pane draws on engines before 2.1.295 too.
+- **One action core** — the Claude tools and the CLI run the same code, so they behave the same.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
@@ -68,11 +68,13 @@ or let it read and update one as it works. The pane opens on its own in the desk
 
 - **Tracks.** One card per workstream: progress bar (done, awaiting you, running, blocked), recent
   momentum ("yesterday +3 · moved 14:02"), and the steps when expanded.
-  - Click a step's icon to move it ○ → ◐ → ✓ (your word, so it also closes a checkpoint).
+  - Hover a step for **Done ✓** to finish it in one press (your word, so it also closes a checkpoint),
+    or click its icon to move it ○ → ◐ → ✓.
+  - Click a phase's header to open or close it; phases with work left start open, finished ones closed.
   - Click the `P·` chip to raise its priority: P3 → P2 → P1 → P0.
-  - Hover a step for **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
+  - Hover a step for **Copy** (`#track/id title`, ready for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
     **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
-  - Hover a track header for **Backlog** to set the whole track aside.
+  - Hover a track header for **Copy** (its title) or **Backlog** (set the whole track aside).
   - **+ Add an item** at the bottom of a track adds your own step, marked **✎ you**. Agents may refine
     it, but they never lose it.
   - **⧉ Copy as Markdown** copies one track.
