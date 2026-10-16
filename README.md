@@ -11,7 +11,7 @@ Every Claude Code session reads the same state when it starts and writes back wh
 tick off their own steps; you see the whole picture in a side pane. You no longer have to piece together
 what happened across five chats, and a fresh session knows where things stand.
 
-<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: tracks with progress bars and priorities, a checkpoint awaiting confirmation, steps with their state, and the sessions and subagents working now"></p>
+<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
 ## What's new in 0.3.0
