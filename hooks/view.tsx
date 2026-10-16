@@ -36,6 +36,8 @@ export type PaneData = {
   onBacklog: (track: string, id: string, backlog: boolean) => void
   onTrackPriority: (track: string, priority: RoadmapPriority | null) => void
   onTrackBacklog: (track: string, backlog: boolean) => void
+  /** The person archives a track (hidden, restorable from the Backlog tab) or brings it back. */
+  onArchive: (track: string, archived: boolean) => void
   /** The item this chat holds, `<track>/<id>`, or ''. */
   focus: string
   onPin: (ref: string) => void
@@ -209,6 +211,7 @@ function sparkText(series: number[]): string {
 function stepRight(s: RoadmapStep, d: PaneData): string {
   if (s.status === 'blocked') return `waits on ${s.blockedBy.join(', ')}`
   if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
+  if (s.status === 'running' && s.stale) return `stale · nobody on it since ${s.lastAt ? when(s.lastAt, d.now, d.tz) : 'long ago'}`
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
   if (s.status === 'awaiting') return s.proposed === 'skipped' ? 'skip to confirm' : 'to confirm'
   if (s.status === 'skipped') return `skipped: ${s.skipReason ?? 'no reason'}`
@@ -276,7 +279,7 @@ function header(els: Els, d: PaneData) {
       {tab('days', 'Days')}
       {tab(
         'backlog',
-        `Backlog ${d.board.tracks.filter(t => t.backlog).length + d.board.tracks.flatMap(t => t.steps).filter(x => x.backlog).length}`,
+        `Backlog ${d.board.tracks.filter(t => t.backlog || t.archived).length + d.board.tracks.filter(t => !t.archived).flatMap(t => t.steps).filter(x => x.backlog).length}`,
       )}
       <Box flexGrow={1} />
       <Button key="copy-all" plain onPress={(press: any) => d.onCopyAll(press?.surface ?? 'desktop')}>
@@ -289,7 +292,7 @@ function header(els: Els, d: PaneData) {
 function needsYou(els: Els, d: PaneData) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
-  if (needs.awaiting.length + needs.failed.length === 0) return null
+  if (needs.awaiting.length + needs.failed.length + needs.stale.length === 0) return null
   const titleOf = (track: string) => d.board.tracks.find(t => t.name === track)?.title ?? track
   return (
     <Box key="attention" flexDirection="column" marginBottom={1}>
@@ -297,7 +300,26 @@ function needsYou(els: Els, d: PaneData) {
         <Text bold>Needs you</Text>
         {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length} to confirm`}</Text> : null}
         {needs.failed.length ? <Text color="error">{`✗ ${needs.failed.length} failed`}</Text> : null}
+        {needs.stale.length ? <Text color="warning">{`◌ ${needs.stale.length} stale`}</Text> : null}
       </Box>
+      {needs.stale.map(st => (
+        <Box key={`stale-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
+          {Line(els, `stale-line-${st.track}-${st.id}`, [
+            { text: '◌ ', color: 'warning' },
+            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+          ])}
+          <Text dimColor wrap="truncate-end">{`   running for ${st.startedAt ? duration(d.now - st.startedAt) : 'a while'}, nobody on it since ${st.lastAt ? when(st.lastAt, d.now, d.tz) : 'long ago'}${st.lastBy ? ` · last ${st.lastBy}` : ''}`}</Text>
+          <Box flexDirection="row" gap={1}>
+            <Text>{'  '}</Text>
+            <Button key={`stale-todo-${st.track}-${st.id}`} onPress={() => d.onCycle(st.track, st.id, 'todo')}>
+              Back to todo
+            </Button>
+            <Button key={`stale-done-${st.track}-${st.id}`} onPress={() => d.onCycle(st.track, st.id, 'done')}>
+              Done ✓
+            </Button>
+          </Box>
+        </Box>
+      ))}
       {needs.awaiting.map(st => (
         <Box key={`await-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
           {Line(els, `await-line-${st.track}-${st.id}`, [
@@ -365,7 +387,17 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
         <Box flexDirection="row" display={d.canDraw ? 'none' : 'flex'} hover={d.canDraw ? { display: 'flex' } : undefined}>
           {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => d.onCopyText(t.title, press?.surface ?? 'desktop') }, 'Copy', <Text><Text dimColor>Copy</Text></Text>)}
           {Btn(els, d, { key: `tshelve-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, !t.backlog) }, "Backlog", <Text><Text dimColor>{t.backlog ? '' : 'Backlog'}</Text></Text>)}
+          {!t.archived && !(done === total && total > 0)
+            ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Archive', <Text><Text dimColor>Archive</Text></Text>)
+            : null}
         </Box>
+        {/* A finished track offers its archive outright: that is the usual next step for it. */}
+        {!t.archived && done === total && total > 0
+          ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Archive', <Text><Text color="success">Archive</Text></Text>)
+          : null}
+        {t.archived
+          ? Btn(els, d, { key: `tunarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, false) }, 'Unarchive', <Text><Text color="suggestion">↺ Unarchive</Text></Text>)
+          : null}
         {t.backlog ? (
           Btn(els, d, { key: `trestore-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, false) }, "Restore", <Text><Text color="suggestion">↺ Restore</Text></Text>)
         ) : null}
@@ -644,10 +676,11 @@ function daysView(els: Els, d: PaneData) {
 
 function backlogView(els: Els, d: PaneData) {
   const { Box, Text } = els
-  const shelved = d.board.tracks.flatMap(t => t.steps.filter(s => s.backlog).map(s => ({ t, s })))
+  const shelved = d.board.tracks.filter(t => !t.archived).flatMap(t => t.steps.filter(s => s.backlog).map(s => ({ t, s })))
   shelved.sort((a, b) => byPriority(a.s, b.s))
-  const shelvedTracks = d.board.tracks.filter(t => t.backlog)
-  if (shelved.length === 0 && shelvedTracks.length === 0) {
+  const shelvedTracks = d.board.tracks.filter(t => t.backlog && !t.archived)
+  const archivedTracks = d.board.tracks.filter(t => t.archived)
+  if (shelved.length === 0 && shelvedTracks.length === 0 && archivedTracks.length === 0) {
     return (
       <Box key="backlog" flexDirection="column">
         <Text dimColor>The backlog is empty. Hover a step and press "Backlog" to set it aside; "↺ Restore" brings it back.</Text>
@@ -670,6 +703,13 @@ function backlogView(els: Els, d: PaneData) {
           {stepRow(els, d, t, s)}
         </Box>
       ))}
+      {archivedTracks.length ? (
+        <Box key="bl-archived" flexDirection="column" marginTop={1}>
+          <Text bold>Archived</Text>
+          <Text dimColor>Closed by you: hidden from the list, the status line and the agents. ↺ Unarchive brings one back.</Text>
+          {archivedTracks.map(t => trackCard(els, d, t))}
+        </Box>
+      ) : null}
     </Box>
   )
 }
@@ -694,7 +734,7 @@ export function drawPane(els: Els, d: PaneData) {
         : d.view === 'backlog'
           ? backlogView(els, d)
           : d.board.tracks
-              .filter(t => !t.backlog)
+              .filter(t => !t.backlog && !t.archived)
               .sort((a, b) => Number(b.name === d.focus.split('/')[0]) - Number(a.name === d.focus.split('/')[0]))
               .map(t => trackCard(els, d, t))}
       {d.view === 'tracks' ? liveSection(els, d) : null}
@@ -712,7 +752,7 @@ export function drawBand(
   const [ft, ...fid] = (d.focus ?? '').split('/')
   const held = d.focus ? d.board.tracks.find(t => t.name === ft)?.steps.find(s => s.id === fid.join('/')) : undefined
   const tracks = d.board.tracks
-    .filter(t => !t.backlog)
+    .filter(t => !t.backlog && !t.archived)
     .map(t => {
       const { done, total } = progress(t)
       return `${t.name} ${total ? Math.round((done / total) * 100) : 0}%`

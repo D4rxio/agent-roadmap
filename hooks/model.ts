@@ -15,6 +15,8 @@ import type {
 export const STATUSES: RoadmapStatus[] = ['todo', 'running', 'done', 'failed', 'blocked', 'awaiting', 'skipped']
 /** A live file older than this is a session that stopped working. */
 export const LIVE_MS = 20_000
+/** A running step nobody has touched or held for this long is flagged as probably abandoned. */
+export const STALE_MS = 2 * 3_600_000
 
 export function slug(text: string): string {
   return text
@@ -133,6 +135,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         createdAt: old?.createdAt ?? e.at,
         updatedAt: e.at,
         backlog: false,
+        archived: false,
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
@@ -280,6 +283,18 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     }
   }
 
+  // Abandoned work: running, last moved a while ago, and nobody on it — no chat holding it recently
+  // (a heartbeat naming it within the window, live or not) and no running agent tagged with it.
+  for (const t of tracks.values()) {
+    for (const step of t.steps) {
+      if (step.status !== 'running' || now - (step.lastAt ?? now) < STALE_MS) continue
+      const ref = `${t.name}/${step.id}`
+      const held = lives.some(l => l.focus === ref && now - l.at < STALE_MS)
+      const worked = [...agents.values()].some(a => a.status === 'running' && a.track === t.name && a.step === step.id)
+      step.stale = !held && !worked
+    }
+  }
+
   return {
     // Most important first (P0 … unprioritized), then the most recently moved.
     tracks: [...tracks.values()].sort((a, b) => trackRank(a) - trackRank(b) || b.updatedAt - a.updatedAt),
@@ -300,12 +315,18 @@ export const ICONS: Record<RoadmapStatus, string> = {
 }
 
 /** What needs the person, across every track. */
-export function attention(board: RoadmapBoard): { awaiting: RoadmapStep[]; blocked: RoadmapStep[]; failed: RoadmapStep[] } {
-  const all = board.tracks.filter(t => !t.backlog).flatMap(t => t.steps)
+export function attention(board: RoadmapBoard): {
+  awaiting: RoadmapStep[]
+  blocked: RoadmapStep[]
+  failed: RoadmapStep[]
+  stale: RoadmapStep[]
+} {
+  const all = board.tracks.filter(t => !t.backlog && !t.archived).flatMap(t => t.steps)
   return {
     awaiting: all.filter(s => s.status === 'awaiting'),
     blocked: all.filter(s => s.status === 'blocked' && !s.backlog),
     failed: all.filter(s => s.status === 'failed' && !s.backlog),
+    stale: all.filter(s => s.stale && !s.backlog),
   }
 }
 
@@ -381,6 +402,7 @@ function applyTriage(
   type Said = { at: number; person: boolean; by: string }
   const prio = new Map<string, Said & { value: RoadmapPriority | null }>()
   const back = new Map<string, Said & { value: boolean }>()
+  const archived = new Map<string, boolean>()
   const wins = (old: Said | undefined, next: Said) => !old || (next.person ? true : !old.person)
   for (const e of sorted) {
     if (e.kind !== 'triage') continue
@@ -393,12 +415,15 @@ function applyTriage(
     if (e.backlog !== undefined && wins(back.get(k), { at: e.at, person, by })) {
       back.set(k, { at: e.at, person, by, value: e.backlog })
     }
+    // Archiving is the person's decision alone: a worker's word on it is ignored.
+    if (e.archived !== undefined && person && e.id === undefined) archived.set(e.track, e.archived)
   }
   for (const t of tracks.values()) {
     const tp = prio.get(t.name)
     const tb = back.get(t.name)
     t.priority = tp?.value ?? undefined
     t.backlog = tb?.value === true
+    t.archived = archived.get(t.name) === true
     t.triagedBy = [tp, tb].filter((x): x is NonNullable<typeof x> => !!x).sort((x, y) => y.at - x.at)[0]?.by
     for (const s of t.steps) {
       const k = `${t.name}/${s.id}`
@@ -488,6 +513,9 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
     `${track}/${id} — ${s.title}`,
     `Track: ${t.title}${t.backlog ? ' (track in backlog)' : ''} · phase: ${s.phase}`,
     `Status: ${s.status}${s.status === 'skipped' ? ` (${s.skipReason ?? 'no reason'})` : ''}${s.status === 'awaiting' && s.proposed === 'skipped' ? ` (a skip is proposed: ${s.skipReason ?? 'no reason'})` : ''}${s.priority ? ` · priority ${s.priority}` : ''}${s.backlog ? ' · IN BACKLOG — do not work on it unless asked' : ''}${s.checkpoint ? ' · checkpoint: the person closes it' : ''}${s.addedBy ? ' · added by the person' : ''}`,
+    s.stale
+      ? 'Stale: marked running, but no chat or agent has been on it for hours — probably abandoned. Take it over (mark it running) or ask the person.'
+      : '',
     s.why ? `Why: ${s.why}` : 'Why: (not written — ask, or infer it from the track and say so)',
     s.scope ? `Scope: ${s.scope}` : '',
     s.doneWhen ? `Done when: ${s.doneWhen}` : 'Done when: (not written — agree it before you call it done)',
@@ -514,7 +542,7 @@ export function progress(track: RoadmapTrack): { done: number; total: number } {
 export function summary(board: RoadmapBoard, opts: { open?: number } = {}): string {
   if (board.tracks.length === 0) return 'The roadmap has no tracks yet.'
   const lines: string[] = []
-  for (const t of board.tracks.filter(x => !x.backlog)) {
+  for (const t of board.tracks.filter(x => !x.backlog && !x.archived)) {
     const { done, total } = progress(t)
     lines.push(`- ${t.priority ? `${t.priority} ` : ''}${t.name} — ${t.title}: ${done}/${total} done`)
     // Open work, most important first: what a new session should pick up.
@@ -527,7 +555,9 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
             ? s.proposed === 'skipped'
               ? ` (a skip awaits the person: ${s.skipReason ?? 'no reason'})`
               : ' (awaiting the person)'
-            : ''
+            : s.stale
+              ? ' (stale: running, but nobody has been on it for hours — take it over or ask)'
+              : ''
       lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${why}`)
     }
     if (open.length > (opts.open ?? 6)) lines.push(`    … ${open.length - (opts.open ?? 6)} more open`)
@@ -540,7 +570,11 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
       lines.push(`    backlog (set aside, not to work on unless asked): ${shelved.map(s => `${t.name}/${s.id}`).join(', ')}`)
     }
   }
-  const shelvedTracks = board.tracks.filter(x => x.backlog)
+  const archivedTracks = board.tracks.filter(x => x.archived)
+  if (archivedTracks.length) {
+    lines.push(`- archived tracks (closed by the person, not to work on): ${archivedTracks.map(x => x.name).join(', ')}`)
+  }
+  const shelvedTracks = board.tracks.filter(x => x.backlog && !x.archived)
   if (shelvedTracks.length) {
     lines.push(`- tracks in backlog (set aside whole, not to work on unless asked): ${shelvedTracks.map(x => x.name).join(', ')}`)
   }
@@ -729,5 +763,5 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
 }
 
 export function boardMarkdown(board: RoadmapBoard, now: number, offsetMin: number): string {
-  return board.tracks.map(t => trackMarkdown(t, now, offsetMin)).join('\n\n')
+  return board.tracks.filter(t => !t.archived).map(t => trackMarkdown(t, now, offsetMin)).join('\n\n')
 }

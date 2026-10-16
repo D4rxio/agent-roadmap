@@ -110,7 +110,7 @@ async function republish($: EngineInterface) {
   await update($, board, () => next)
   const live = next.sessions.filter(s => s.isLive).length
   const running = next.agents.filter(a => a.status === 'running').length
-  const tracks = next.tracks.filter(t => !t.backlog).map(t => {
+  const tracks = next.tracks.filter(t => !t.backlog && !t.archived).map(t => {
     const { done, total } = progress(t)
     return `${t.name} ${done}/${total}`
   })
@@ -332,6 +332,12 @@ async function personTriage($: EngineInterface, track: string, id: string, chang
 async function personTrackTriage($: EngineInterface, track: string, change: { priority?: RoadmapPriority | null; backlog?: boolean }) {
   await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, ...change, origin: 'person' })
   if (change.backlog !== undefined) $.ui.toast(change.backlog ? `${track} moved to backlog` : `↺ ${track} restored`)
+}
+
+/** The person archives a track or brings it back: their decision alone, so only the pane writes it. */
+async function personArchive($: EngineInterface, track: string, archived: boolean) {
+  await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, archived, origin: 'person' })
+  $.ui.toast(archived ? `${track} archived — the Backlog tab brings it back` : `↺ ${track} unarchived`)
 }
 
 async function personStatus($: EngineInterface, track: string, id: string, status: RoadmapStatus) {
@@ -736,6 +742,7 @@ export const register: Register = on => {
       onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
       onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
       onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
+      onArchive: (track, archived) => void personArchive($, track, archived),
     })
   })
 

@@ -92,6 +92,8 @@ export type RoadmapEvent =
       id?: string
       priority?: RoadmapPriority | null
       backlog?: boolean
+      /** A whole track archived (true) or brought back (false). The person's word only. */
+      archived?: boolean
       origin?: RoadmapOrigin
     }
 
@@ -130,6 +132,8 @@ export type RoadmapStep = {
   skipReason?: string
   /** What an `awaiting` step waits for the person to confirm. */
   proposed?: 'done' | 'skipped'
+  /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */
+  stale?: boolean
   /** Why this step exists: the problem it solves. */
   why?: string
   /** Its boundaries: what is in, and what must not be touched. */
@@ -153,6 +157,8 @@ export type RoadmapTrack = {
   priority?: RoadmapPriority
   /** The whole track set aside: out of the main list, the status line and next work. */
   backlog: boolean
+  /** Archived by the person: hidden everywhere but the Backlog tab and history, restorable. */
+  archived: boolean
   triagedBy?: string
 }
 

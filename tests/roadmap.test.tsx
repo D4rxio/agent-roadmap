@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { doneAction, markAction, planAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1161,6 +1161,92 @@ test('phases with work left start open, finished ones start closed, a hand toggl
     await ui.press({ key: 'phasefold-api::Done phase' })
     await ui.press({ key: 'phasefold-api::Open phase' })
     await ui.press({ key: 'fold-api' })
+    await ui.unmount()
+  }
+})
+
+test('archive: the person alone archives a track; it leaves the list and the agents, history keeps it', async () => {
+  const other = { ...PLAN, track: 'docs', title: 'Docs', at: 1100 } as RoadmapEvent
+  const tri = (at: number, track: string, change: object, origin: 'person' | 'agent') =>
+    ({ kind: 'triage', at, session: origin, track, ...change, origin }) as RoadmapEvent
+  const archived = fold([PLAN, other, tri(2000, 'api', { archived: true }, 'person')], [], 9000)
+  expect(archived.tracks.find(t => t.name === 'api')?.archived).toBe(true)
+  expect(summary(archived)).not.toContain('api/1.1')
+  expect(summary(archived)).toContain('archived tracks (closed by the person, not to work on): api')
+  // An agent cannot archive, nor bring back what the person archived.
+  expect(fold([PLAN, tri(2000, 'api', { archived: true }, 'agent')], [], 9000).tracks[0]?.archived).toBe(false)
+  const back = fold([PLAN, tri(2000, 'api', { archived: true }, 'person'), tri(3000, 'api', { archived: false }, 'agent')], [], 9000)
+  expect(back.tracks[0]?.archived).toBe(true)
+  expect(fold([PLAN, tri(2000, 'api', { archived: true }, 'person'), tri(3000, 'api', { archived: false }, 'person')], [], 9000).tracks[0]?.archived).toBe(false)
+})
+
+test('stale: running with nobody on it for hours is flagged; a recent holder or a running agent is not', async () => {
+  const now = 10 * STALE_MS
+  const running = (at: number) => ({ kind: 'step', at, session: 's', track: 'api', id: '1.1', status: 'running', origin: 'agent' }) as RoadmapEvent
+  const step = (events: RoadmapEvent[], lives: object[] = []) =>
+    fold(events, lives as never, now).tracks[0]?.steps.find(x => x.id === '1.1')
+  expect(step([PLAN, running(now - 60_000)])?.stale).toBeFalsy()
+  expect(step([PLAN, running(now - 3 * 3_600_000)])?.stale).toBe(true)
+  // A chat that held it an hour ago (not live now) keeps it from being stale.
+  expect(step([PLAN, running(now - 3 * 3_600_000)], [{ session: 'c', title: 'c', at: now - 3_600_000, agents: [], focus: 'api/1.1' }])?.stale).toBe(false)
+  // So does a running agent tagged with it.
+  const agent = { kind: 'agent', at: now - 3 * 3_600_000, session: 's', agentId: 'a', description: 'x', type: 'Explore', track: 'api', step: '1.1' } as RoadmapEvent
+  expect(step([PLAN, running(now - 3 * 3_600_000), agent])?.stale).toBe(false)
+  const b = fold([PLAN, running(now - 3 * 3_600_000)], [], now)
+  expect(summary(b)).toContain('(stale: running, but nobody has been on it for hours')
+  expect(brief(b, 'api', '1.1')).toContain('Stale: marked running')
+})
+
+test('from the pane: archive a finished track, find it under Archived, bring it back; a stale step offers its way out', async ($, on) => {
+  const old = Date.now() - 3 * 3_600_000
+  const events = [
+    PLAN,
+    { kind: 'step', at: 1100, session: 's', track: 'api', id: '1.1', status: 'done', origin: 'person' },
+    { kind: 'step', at: 1200, session: 's', track: 'api', id: '1.2', status: 'done', origin: 'person' },
+    { kind: 'plan', at: 1300, session: 's', track: 'web', title: 'Web app', phases: [{ name: 'P', steps: [{ id: '1', title: 'Left running' }] }] },
+    { kind: 'step', at: old, session: 's', track: 'web', id: '1', status: 'running', origin: 'agent' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-seventeen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // The finished track offers Archive; archiving hides it from the list.
+    expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    await ui.press({ key: 'tarchive-api' })
+    expect(await ui.find({ text: /API v2/ })).toBe(undefined)
+    await ui.press({ key: 'view-backlog' })
+    expect(await ui.find({ text: /^Archived$/ })).toBeDefined()
+    await ui.press({ key: 'tunarchive-api' })
+    await ui.press({ key: 'view-tracks' })
+    expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    // The step left running for hours is stale: Needs you offers it back to todo.
+    expect(await ui.find({ text: /1 stale/ })).toBeDefined()
+    if (surface === 'desktop') {
+      await ui.press({ key: 'stale-todo-web-1' })
+      expect(await ui.find({ text: /stale/ })).toBe(undefined)
+    }
     await ui.unmount()
   }
 })
