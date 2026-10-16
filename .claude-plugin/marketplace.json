@@ -1,5 +1,5 @@
 {
-  "name": "claude-roadmap",
+  "name": "agent-roadmap",
   "description": "Roadmap: shared planning state for coding agents.",
   "owner": {
     "name": "D4rxio"

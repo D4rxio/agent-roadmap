@@ -15,5 +15,7 @@
     "timeline",
     "backlog"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "homepage": "https://github.com/D4rxio/agent-roadmap",
+  "repository": "https://github.com/D4rxio/agent-roadmap"
 }

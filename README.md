@@ -1,6 +1,6 @@
 # Roadmap — shared planning state for coding agents
 
-[![release](https://img.shields.io/github/v/release/D4rxio/claude-roadmap?label=release)](https://github.com/D4rxio/claude-roadmap/releases)
+[![release](https://img.shields.io/github/v/release/D4rxio/agent-roadmap?label=release)](https://github.com/D4rxio/agent-roadmap/releases)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A lightweight, file-based roadmap that lets multiple agents share the same execution plan, backlog,
@@ -43,7 +43,7 @@ what is next, what waits on whom — kept as plain JSON files.
 In a Claude Code terminal session:
 
 ```
-/plugin install roadmap --marketplace D4rxio/claude-roadmap
+/plugin install roadmap --marketplace D4rxio/agent-roadmap
 ```
 
 Answer `y` to add the marketplace, then pick a scope. The desktop app's Code tab loads plugins installed
@@ -156,7 +156,7 @@ To run your working copy instead of the installed one, add its folder to `CLAUDE
 
 This started as a tool for one person juggling many parallel Claude sessions, and it is shaped by real
 use. Ideas, rough edges and "it would be great if…" are all welcome: open an
-[issue](https://github.com/D4rxio/claude-roadmap/issues) or a pull request. If you change the journal
+[issue](https://github.com/D4rxio/agent-roadmap/issues) or a pull request. If you change the journal
 format, update [docs/journal-format.md](docs/journal-format.md) and add a test in `tests/` — the board is
 rebuilt from events in any order, so every new event kind needs a test that proves order and duplicates
 do not change the result.

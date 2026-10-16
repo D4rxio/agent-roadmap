@@ -48,5 +48,5 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
-[0.2.0]: https://github.com/D4rxio/claude-roadmap/releases/tag/v0.2.0
-[0.1.0]: https://github.com/D4rxio/claude-roadmap/releases/tag/v0.1.0
+[0.2.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.2.0
+[0.1.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.1.0
