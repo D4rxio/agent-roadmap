@@ -269,6 +269,8 @@ export type RoadmapAgent = {
   endedAt?: number
   activity?: string
   tools: number
+  /** The project its session worked in when it started. */
+  project?: string
 }
 
 export type RoadmapProject = {

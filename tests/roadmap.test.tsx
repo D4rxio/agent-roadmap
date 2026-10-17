@@ -1937,6 +1937,34 @@ test('projects, second round: who works where stays in its project; external lin
   expect(attention(loop).brokenMoves.map(s => s.id).sort()).toEqual(['1', '2'])
 })
 
+test('projects, third round: a session that moves keeps its past where it happened', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, sessionId = 's') =>
+    ({ kind: 'plan', at, session: sessionId, track, phases: [{ name: 'P', steps: [{ id: '1', title: `${track} work`, review: off }] }] }) as RoadmapEvent
+  const session = (at: number, id: string, project: string) => ({ kind: 'session', at, session: id, title: `chat ${id}`, actor: 'claude', project }) as RoadmapEvent
+  const step = (at: number, track: string, sessionId: string) =>
+    ({ kind: 'step', at, session: sessionId, track, id: '1', status: 'running', actor: 'claude', origin: 'agent' }) as RoadmapEvent
+  const agent = (at: number, id: string) => ({ kind: 'agent', at, session: 'm', agentId: id, description: `agent ${id}`, type: 'Explore' }) as RoadmapEvent
+  // The session works in A, then moves to B and does nothing more there.
+  const history = [plan(1, 'docs', 'm'), session(1, 'm', '/repos/a'), step(2, 'docs', 'm'), step(3, 'docs', 'm'), agent(4, 'ga'), session(10, 'm', '/repos/b')]
+  const board = fold(history, [], 99)
+  // 1. The track it worked on in A stays in A.
+  expect(board.tracks.find(t => t.name === 'docs')?.project).toBe('/repos/a')
+  // 2. The agent it ran in A stays in A — pane and Days alike.
+  expect(forProject(board, '/repos/a').agents.map(a => a.id)).toEqual(['ga'])
+  expect(forProject(board, '/repos/b').agents.map(a => a.id)).toEqual([])
+  expect(days(forProject(board, '/repos/a'), 99, 0).flatMap(d => d.entries).some(e => e.kind === 'agent')).toBe(true)
+  // The session itself is in B now.
+  expect(forProject(board, '/repos/b').sessions.map(s => s.id)).toEqual(['m'])
+  // 3. A live file older than the session's move does not pull it back.
+  const stale = fold([...history, agent(12, 'gb')], [{ session: 'm', title: 'chat m', at: 5, agents: [], project: '/repos/a' }], 99)
+  expect(stale.sessions.find(s => s.id === 'm')?.project).toBe('/repos/b')
+  expect(forProject(stale, '/repos/b').agents.map(a => a.id)).toEqual(['gb'])
+  expect(forProject(stale, '/repos/a').agents.map(a => a.id)).toEqual(['ga'])
+  // … while a newer one does move it.
+  expect(fold(history, [{ session: 'm', title: 'chat m', at: 20, agents: [], project: '/repos/c' }], 99).sessions.find(s => s.id === 'm')?.project).toBe('/repos/c')
+})
+
 test('the pane keeps a way to every project, shows only its own chats, and offers to undo a move going nowhere', async ($, on) => {
   const off = { required: false }
   const plan = (at: number, track: string, project?: string, steps: object[] = [{ id: '1', title: `${track} work`, review: off }]) =>

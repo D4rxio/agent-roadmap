@@ -92,6 +92,24 @@ async function codeHash($: EngineInterface, files: string[]): Promise<string> {
   return (h >>> 0).toString(16)
 }
 
+// State keys newer than a running chat's state contract (fixed when the chat started; a module reloaded
+// in it can name keys it does not know) are read with a fallback instead of failing the whole render.
+async function readProjectView($: EngineInterface): Promise<string> {
+  try {
+    return (await read($, projectView)) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+async function readOutdated($: EngineInterface): Promise<boolean> {
+  try {
+    return (await read($, outdated)) === true
+  } catch {
+    return false
+  }
+}
+
 async function noteCode($: EngineInterface) {
   const now = await codeOnDisk($)
   code.sig = now.sig
@@ -104,7 +122,7 @@ async function checkCode($: EngineInterface) {
   if (now.sig === code.sig) return
   code.sig = now.sig
   const changed = (await codeHash($, now.files)) !== code.hash
-  if (changed !== (await read($, outdated))) await update($, outdated, () => changed)
+  if (changed !== (await readOutdated($))) await update($, outdated, () => changed).catch(() => undefined)
 }
 
 // The module's own memory of the shared journal; a reload re-reads it from disk.
@@ -777,7 +795,7 @@ export const register: Register = on => {
       return { text: `Roadmap band above the prompt ${next ? 'shown' : 'hidden'}.` }
     }
     if (arg === 'copy') {
-      const b = forProject(await read($, board), (await read($, projectView)) || journal.project || '*')
+      const b = forProject(await read($, board), (await readProjectView($)) || journal.project || '*')
       const done = await $.ui.copy({ text: boardMarkdown(b, Date.now(), await read($, tzOffset)) })
       return { text: done.isCopied ? 'Roadmap copied as Markdown.' : `Could not copy: ${done.reason}` }
     }
@@ -848,64 +866,75 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
-    const tz = await read($, tzOffset)
-    // The pane shows one project: this chat's own unless the person picked another, or All.
-    const picked = await read($, projectView)
-    const shown = picked || journal.project || '*'
-    return drawPane(els, {
-      board: forProject(await read($, board), shown),
-      project: shown,
-      here: journal.project,
-      onProjectView: (p: string) => void update($, projectView, () => p),
-      onPlace: (track: string, p: string | null) => void personPlace($, track, p),
-      outdated: await read($, outdated),
-      richButtons: journal.richButtons,
-      view: (await read($, view)) as RoadmapView,
-      expanded: await read($, expanded),
-      now: Date.now(),
-      tz,
-      me: journal.me,
-      cols: Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 60),
-      canDraw: e.surface !== 'terminal',
-      onView: next => void update($, view, () => next),
-      onToggle: track =>
-        void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
-      phaseOpen: await read($, phaseOpen),
-      onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })),
-      onCopyTrack: (track, surface) =>
-        void (async () => {
-          const t = (await read($, board)).tracks.find(x => x.name === track)
-          if (!t) return
-          const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz, await read($, board)), surface: surface as never })
-          $.ui.toast(done.isCopied ? `⧉ ${t.title} copied` : `Could not copy: ${done.reason}`)
-        })(),
-      onCopyAll: surface =>
-        void (async () => {
-          const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
-          $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
-        })(),
-      onCopyText: (text, surface) =>
-        void (async () => {
-          const done = await $.ui.copy({ text, surface: surface as never })
-          $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
-        })(),
-      onDecide: (track, id, status) => void decide($, track, id, status),
-      editing: await read($, editing),
-      focus: await read($, focus),
-      onPin: ref => void setFocus($, ref),
-      onSkip: (track, id, reason) => void personSkip($, track, id, reason),
-      onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
-      onCycle: (track, id, status) => void personStatus($, track, id, status),
-      onAdd: (track, title) => void personAdd($, track, title),
-      onStartEdit: ref => void update($, editing, () => ref),
-      onRename: (track, id, title) => void personEdit($, track, id, { title }),
-      onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
-      onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
-      onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
-      onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
-      onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
-      onArchive: (track, archived) => void personArchive($, track, archived),
-    })
+    // A pane that cannot draw says why instead of staying blank (e.g. code reloaded in a running chat).
+    try {
+      const tz = await read($, tzOffset)
+      // The pane shows one project: this chat's own unless the person picked another, or All.
+      const picked = await readProjectView($)
+      const shown = picked || journal.project || '*'
+      return drawPane(els, {
+        board: forProject(await read($, board), shown),
+        project: shown,
+        here: journal.project,
+        onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),
+        onPlace: (track: string, p: string | null) => void personPlace($, track, p),
+        outdated: await readOutdated($),
+        richButtons: journal.richButtons,
+        view: (await read($, view)) as RoadmapView,
+        expanded: await read($, expanded),
+        now: Date.now(),
+        tz,
+        me: journal.me,
+        cols: Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 60),
+        canDraw: e.surface !== 'terminal',
+        onView: next => void update($, view, () => next),
+        onToggle: track =>
+          void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
+        phaseOpen: await read($, phaseOpen),
+        onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })),
+        onCopyTrack: (track, surface) =>
+          void (async () => {
+            const t = (await read($, board)).tracks.find(x => x.name === track)
+            if (!t) return
+            const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz, await read($, board)), surface: surface as never })
+            $.ui.toast(done.isCopied ? `⧉ ${t.title} copied` : `Could not copy: ${done.reason}`)
+          })(),
+        onCopyAll: surface =>
+          void (async () => {
+            const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
+            $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
+          })(),
+        onCopyText: (text, surface) =>
+          void (async () => {
+            const done = await $.ui.copy({ text, surface: surface as never })
+            $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
+          })(),
+        onDecide: (track, id, status) => void decide($, track, id, status),
+        editing: await read($, editing),
+        focus: await read($, focus),
+        onPin: ref => void setFocus($, ref),
+        onSkip: (track, id, reason) => void personSkip($, track, id, reason),
+        onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
+        onCycle: (track, id, status) => void personStatus($, track, id, status),
+        onAdd: (track, title) => void personAdd($, track, title),
+        onStartEdit: ref => void update($, editing, () => ref),
+        onRename: (track, id, title) => void personEdit($, track, id, { title }),
+        onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
+        onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
+        onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
+        onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
+        onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
+        onArchive: (track, archived) => void personArchive($, track, archived),
+      })
+    } catch (err) {
+      const { Box, Text } = els
+      return (
+        <Box flexDirection="column">
+          <Text color="warning" wrap="wrap">{`The roadmap could not draw this pane: ${err instanceof Error ? err.message : String(err)}`}</Text>
+          <Text dimColor wrap="wrap">Restart this chat to load the plugin cleanly; other chats are not affected.</Text>
+        </Box>
+      )
+    }
   })
 
   // The pane's toggle, one line above the prompt (`/roadmap band` hides it).
@@ -920,7 +949,7 @@ export const register: Register = on => {
       cols: e.props.bodyColumns,
       onToggle: () => void togglePane($),
       focus: await read($, focus),
-      outdated: await read($, outdated),
+      outdated: await readOutdated($),
     })
   })
 }

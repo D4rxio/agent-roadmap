@@ -294,7 +294,7 @@ function header(els: Els, d: PaneData) {
   // With more than one project, a row to pick which one the pane shows; this chat's own is the default.
   // Every project with tracks (archived ones count: Backlog shows them), and this chat's own. Shown when
   // there is a choice, or when the pane is away from this chat's project, so there is always a way back.
-  const projects = d.board.projects.filter(p => p.tracks > 0 || p.archived > 0 || p.key === d.here)
+  const projects = (d.board.projects ?? []).filter(p => p.tracks > 0 || p.archived > 0 || p.key === d.here)
   const picker =
     d.onProjectView && (projects.length > 1 || (d.project !== undefined && d.project !== (d.here ?? '*'))) ? (
       <Box key="projects" flexDirection="row" gap={1} marginBottom={1}>
@@ -441,7 +441,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
     blocked ? `⊘ ${blocked}` : '',
     live ? `● ${live} live` : '',
     shelved.length ? `${shelved.length} in backlog` : '',
-    !t.project && d.board.projects.length > 1 ? 'in no project' : '',
+    !t.project && (d.board.projects ?? []).length > 1 ? 'in no project' : '',
   ].filter(Boolean)
   return (
     <Box key={`track-${t.name}`} flexDirection="column" marginBottom={1}>
@@ -455,12 +455,12 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
         <Box flexDirection="row" display={d.canDraw ? 'none' : 'flex'} hover={d.canDraw ? { display: 'flex' } : undefined}>
           {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => d.onCopyText(t.title, press?.surface ?? 'desktop') }, 'Copy', <Text><Text dimColor>Copy</Text></Text>)}
           {Btn(els, d, { key: `tshelve-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, !t.backlog) }, "Backlog", <Text><Text dimColor>{t.backlog ? '' : 'Backlog'}</Text></Text>)}
-          {d.onPlace && d.board.projects.length > 0
+          {d.onPlace && (d.board.projects ?? []).length > 0
             ? (() => {
                 // Each press moves the track to the next project, then to none, then round again.
-                const keys: (string | null)[] = [...d.board.projects.map(p => p.key), null]
+                const keys: (string | null)[] = [...(d.board.projects ?? []).map(p => p.key), null]
                 const next = keys[(keys.indexOf(t.project ?? null) + 1) % keys.length] ?? null
-                const label = `⌂ ${d.board.projects.find(p => p.key === t.project)?.name ?? 'no project'}`
+                const label = `⌂ ${(d.board.projects ?? []).find(p => p.key === t.project)?.name ?? 'no project'}`
                 return Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, label, <Text><Text dimColor>{label}</Text></Text>)
               })()
             : null}
