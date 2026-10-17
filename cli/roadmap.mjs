@@ -17,15 +17,17 @@
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
 // Identity: --session / $ROADMAP_SESSION (default: one per actor, project and day), --title /
-// $ROADMAP_TITLE (default "<Actor> · <project>"). The actor is read from the environment when it can be:
-// inside Codex's sandbox ($CODEX_SANDBOX) it is "codex", inside Claude Code ($CLAUDECODE) it is "claude",
-// and --actor cannot change either. Elsewhere --actor / $ROADMAP_ACTOR (default "codex") is a declaration,
-// recorded as such: a cross-model review is only as independent as the identity behind it.
+// $ROADMAP_TITLE (default "<Actor> · <project>"). The actor comes from the process tree when it can: the
+// nearest Codex or Claude process above this one names it ("process"). Inside Codex's sandbox, where the
+// tree cannot be read, $CODEX_SANDBOX names it "codex" ("codex-sandbox"). --actor cannot change either.
+// Otherwise --actor / $ROADMAP_ACTOR (default "codex") is a declaration ("declared"): it is recorded, but
+// never counts as a cross-model review. Claude records its reviews with its own tool, not here.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import * as model from '../hooks/model.ts'
 import * as actions from '../hooks/actions.ts'
 
@@ -43,8 +45,34 @@ for (let i = 0; i < argv.length; i++) {
 const [command, ...args] = rest
 
 const DIR = process.env.CLAUDE_ROADMAP_DIR || join(homedir(), '.claude', 'roadmap')
-// Codex launched from Claude Code inherits CLAUDECODE, so the sandbox marker is checked first.
-const detected = process.env.CODEX_SANDBOX ? ['codex', 'codex-sandbox'] : process.env.CLAUDECODE ? ['claude', 'claude-code-env'] : undefined
+/** The nearest agent host above this process — ['codex'|'claude', 'process'] — or why it is unknown. */
+function host() {
+  // An absolute path, so a `ps` earlier on PATH cannot answer for the real one.
+  const ps = ['/bin/ps', '/usr/bin/ps'].find(p => existsSync(p))
+  if (process.platform === 'win32' || !ps) return { blocked: true }
+  let pid = process.ppid
+  for (let hop = 0; hop < 32 && pid > 1; hop++) {
+    let line
+    try {
+      line = execFileSync(ps, ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    } catch {
+      return { blocked: hop === 0 }
+    }
+    const m = /^(\d+)\s+(.*)$/.exec(line)
+    if (!m) return {}
+    const name = basename(m[2]).toLowerCase()
+    if (name.startsWith('codex')) return { found: 'codex' }
+    if (name.startsWith('claude')) return { found: 'claude' }
+    pid = Number(m[1])
+  }
+  return {}
+}
+const seen = host()
+const detected = seen.found
+  ? [seen.found, 'process']
+  : seen.blocked && process.env.CODEX_SANDBOX && process.platform !== 'win32'
+    ? ['codex', 'codex-sandbox']
+    : undefined
 const actor = detected ? detected[0] : String(flags.actor || process.env.ROADMAP_ACTOR || 'codex')
 const via = detected ? detected[1] : 'declared'
 if (detected && flags.actor && String(flags.actor) !== actor) {
@@ -157,7 +185,7 @@ const offset = -new Date().getTimezoneOffset()
 function act(run, activity) {
   const { events, lives } = load()
   const old = existsSync(join(DIR, 'live', `${session}.json`)) ? parse(readFileSync(join(DIR, 'live', `${session}.json`), 'utf8')) : undefined
-  const r = run({ events, lives, now: Date.now(), session, actor, via, focus: old?.focus })
+  const r = run({ events, lives, now: Date.now(), session, actor, via, channel: 'cli', focus: old?.focus })
   if (!r.ok) fail(r.text)
   if (r.emit.length) sessionEvent(events)
   for (const ev of r.emit) emit(ev)

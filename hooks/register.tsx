@@ -384,6 +384,7 @@ async function act($: EngineInterface, run: (ctx: ActionContext) => ActionResult
     session: journal.me,
     actor: 'claude',
     via: 'claude-code',
+    channel: 'tool',
     track: journal.track,
     focus: journal.focus,
     hints: { codexInstalled: journal.codexInstalled, cli: 'node ~/.claude/mods/roadmap/cli/roadmap.mjs' },

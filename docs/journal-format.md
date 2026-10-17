@@ -11,7 +11,8 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - The board (tracks, steps, sessions, agents) is computed from all events sorted by `at`. The order in
   which files arrive does not matter, and a duplicate changes nothing. Events of the same millisecond are
   ordered by kind (`session`, `plan`, `add`, `edit`, `agent`, `agent-end`, `step`, `triage`, `review`),
-  then by their JSON text — every reader folds them the same way.
+  step reports in the order work goes (`todo`, `running`, `blocked`, `failed`, `skipped`, `done`), then
+  by their JSON text — every reader folds them the same way.
 - **A worker reports, the person closes.** A worker's `done` on a `checkpoint` step, or on a step that last
   `failed`, becomes `awaiting` until an event with `"origin": "person"` confirms it.
 - `live/<session>.json` is a worker's heartbeat, rewritten by that worker only. A file older than 20 s
@@ -49,17 +50,22 @@ Any tool may read it, and append to it under the same rules, so other agents and
   different model family (the leading letters of `actor`, lower-cased: `claude-opus`, `claude_code` and
   `Claude` are all `claude`) from the implementer — the actor of the last worker `running`/`done` on the
   step. Steps new to a track must have a policy (their own or the track's); `{ "required": false }` opts
-  out on purpose. A re-laid plan that omits `review` keeps the policy in force, and a plan never lowers
-  one (a weaker policy than the current one is ignored); it can raise it.
-- A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` recorded
-  strictly after the step last went `running` (with no `running`, after the worker's first `done`) meets
-  the policy with `pass` or `findings`; a qualifying `fail` keeps it out, and of qualifying reviews in the
-  same millisecond a `fail` wins. A review written before the work it would review never counts. The
-  person's own `done` is final. A review is written by the reviewer itself, under its own `session` and
-  `actor`, with `via` saying how that actor was established: `claude-code` (the mod's tool),
-  `codex-sandbox` / `claude-code-env` (the CLI read it from the environment) or `declared` (`--actor`,
-  unverified). Independence is only as good as that: the journal is a local, single-user file, not a proof
-  against someone who writes events by hand.
+  out on purpose. A plan never lowers the policy a step has been under — its own or its track's, even
+  after the step left a plan and came back: each part (required, independence, mode) is held at the
+  strictest it ever was. A plan can raise it. A re-laid plan that omits `review` keeps what is in force.
+- A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` meets the
+  policy with `pass` or `findings`. A review reviews the work last reported done: it counts only if written
+  strictly after the worker's latest `done`, while no `running` has reopened the work. Each new `done` is
+  new work and needs a new review. A qualifying `fail` keeps it out; of qualifying reviews in the same
+  millisecond a `fail` wins. The person's own `done` is final.
+- A review is written by the reviewer itself, under its own `session` and `actor`, with `via` saying how
+  the actor was established: `claude-code` (the mod's own tool, run by the host), `process` (the CLI found
+  the nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the process
+  tree cannot be read, `$CODEX_SANDBOX`) or `declared` (`--actor`, nothing behind it). A `declared` review
+  never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
+  review as Claude — Claude reviews through its own tool. This makes a forged identity a deliberate act,
+  not an accident; it does not make one impossible: the journal is a local, single-user directory, and
+  anyone who writes its files by hand can write anything. The person's confirmation stays the authority.
 - `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.

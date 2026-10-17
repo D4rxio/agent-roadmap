@@ -74,13 +74,14 @@ export function refInText(
  * (an explicit mark or an agent's start/end), duplicates change nothing.
  */
 const KIND_ORDER: string[] = ['session', 'plan', 'add', 'edit', 'agent', 'agent-end', 'step', 'triage', 'review']
+const STATUS_ORDER: string[] = ['todo', 'running', 'blocked', 'failed', 'skipped', 'done']
 
 export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number): RoadmapBoard {
   // Time first; events of the same millisecond in a fixed order — by kind (a plan before the work on
-  // it, an agent's start before its end), then by content — so the board never depends on the order
-  // files happened to be read in.
+  // it, an agent's start before its end), step reports in the order work goes (running before done),
+  // then by content — so the board never depends on the order files happened to be read in.
   const sorted = [...events]
-    .map(e => ({ e, r: KIND_ORDER.indexOf(e.kind), k: JSON.stringify(e) }))
+    .map(e => ({ e, r: KIND_ORDER.indexOf(e.kind) * 10 + (e.kind === 'step' ? STATUS_ORDER.indexOf(e.status) : 0), k: JSON.stringify(e) }))
     .sort((a, b) => a.e.at - b.e.at || a.r - b.r || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
     .map(x => x.e)
   const tracks = new Map<string, RoadmapTrack>()
@@ -99,6 +100,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     session?: string
   }
   const reviews = new Map<string, RoadmapReview[]>()
+  // The strictest review policy each step has ever been under (its own or its track's), by
+  // track/id: it outlives the step leaving a plan, so dropping and re-adding an id cannot shed it.
+  const floors = new Map<string, RoadmapReviewPolicy>()
   const words = new Map<string, Word[]>()
   const key = (track: string, id: string) => `${track}/${id}`
 
@@ -126,6 +130,16 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       const old = tracks.get(e.track)
       const phases = e.phases.map(p => ({ name: p.name, stepIds: p.steps.map(s => s.id) }))
       const laid = new Map(e.phases.flatMap(p => p.steps.map(s => [s.id, { ...s, phase: p.name }] as const)))
+      const trackReview = stricter(e.review, old?.review)
+      // A plan (an agent's) can raise a step's review policy, never lower it: what this plan puts in
+      // force (the step's own, else the track's) is held to the strictest the step was ever under.
+      const reviewOf = (id: string, own: RoadmapReviewPolicy | undefined) => {
+        const k = key(e.track, id)
+        const floor = floors.get(k)
+        const effective = stricter(own ?? trackReview, floor)
+        if (effective) floors.set(k, effective)
+        return same(effective, own ?? trackReview) ? own : effective
+      }
       const steps: RoadmapStep[] = [...laid].map(([id, t]) => ({
         track: e.track,
         id,
@@ -137,9 +151,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         why: t.why,
         scope: t.scope,
         doneWhen: t.doneWhen,
-        // A re-laid step keeps its review policy unless the plan raises it: a plan (an agent's) never
-        // lowers what an earlier plan required.
-        review: stronger(t.review, old?.steps.find(x => x.id === id)?.review),
+        // A re-laid step that omits `review` keeps its own; the floor above keeps the rest.
+        review: reviewOf(id, t.review ?? old?.steps.find(x => x.id === id)?.review),
         reviews: [],
         agents: [],
         backlog: false,
@@ -153,7 +166,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         updatedAt: e.at,
         backlog: false,
         archived: false,
-        review: stronger(e.review, old?.review),
+        review: trackReview,
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
@@ -253,12 +266,14 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       const work = said.filter(w => w.origin !== 'person' && (w.status === 'running' || w.status === 'done'))
       const last = work[work.length - 1]
       step.implementer = last?.actor || last?.session ? { actor: last.actor ?? 'unknown', session: last.session ?? '' } : undefined
-      // A review counts only if it comes after the work it reviews: after the step last went running,
-      // or — with no running — after the worker's first done. Same millisecond does not count.
+      // A review reviews the work last reported done: it counts only if written strictly after the
+      // worker's latest done, and only while no running has reopened the work since. A new done (new
+      // work) needs a new review; a review written before the work, or in the same millisecond, never counts.
       const lastRun = [...said].reverse().find(w => w.status === 'running')
-      const firstDone = work.find(w => w.status === 'done')
-      const attempt = lastRun?.at ?? firstDone?.at ?? Number.POSITIVE_INFINITY
-      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at > attempt).sort((a, b) => a.at - b.at)
+      const lastDone = [...work].reverse().find(w => w.status === 'done')
+      step.reportedAt = lastDone && lastDone.at >= (lastRun?.at ?? Number.NEGATIVE_INFINITY) ? lastDone.at : undefined
+      const since = step.reportedAt ?? Number.POSITIVE_INFINITY
+      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at > since).sort((a, b) => a.at - b.at)
       if (step.review?.required) {
         const counted = step.reviews.filter(r => qualifies(step.review!, step.implementer, r))
         const latestAt = counted.length ? counted[counted.length - 1]!.at : undefined
@@ -491,18 +506,26 @@ export function family(actor: string | undefined): string {
   return (actor ?? '').toLowerCase().match(/^[a-z]+/)?.[0] ?? 'unknown'
 }
 
-const STRENGTH = { any: 1, 'other-session': 2, 'cross-model': 3 } as const
+const INDEPENDENCE = ['any', 'other-session', 'cross-model'] as const
 
-function policyRank(p: RoadmapReviewPolicy | undefined): number {
-  if (!p?.required) return 0
-  return (STRENGTH[p.independence ?? 'cross-model'] ?? 1) * 2 + (p.mode === 'adversarial' ? 1 : 0)
+/**
+ * The stricter of two policies, part by part: required if either requires, the stronger
+ * independence and the stronger mode of the two. A later plan can raise a policy, never lower any part.
+ */
+export function stricter(next: RoadmapReviewPolicy | undefined, prev: RoadmapReviewPolicy | undefined): RoadmapReviewPolicy | undefined {
+  if (!prev?.required) return next ?? prev
+  if (!next?.required) return prev
+  const rank = (p: RoadmapReviewPolicy) => INDEPENDENCE.indexOf(p.independence ?? 'cross-model')
+  return {
+    required: true,
+    independence: INDEPENDENCE[Math.max(rank(next), rank(prev))],
+    mode: next.mode === 'adversarial' || prev.mode === 'adversarial' ? 'adversarial' : 'standard',
+  }
 }
 
-/** The stricter of two policies: a later plan can raise a step's review policy, never lower it. */
-export function stronger(next: RoadmapReviewPolicy | undefined, prev: RoadmapReviewPolicy | undefined): RoadmapReviewPolicy | undefined {
-  if (!prev) return next
-  if (!next) return prev
-  return policyRank(next) >= policyRank(prev) ? next : prev
+function same(a: RoadmapReviewPolicy | undefined, b: RoadmapReviewPolicy | undefined): boolean {
+  if (!a?.required || !b?.required) return !a?.required && !b?.required
+  return (a.independence ?? 'cross-model') === (b.independence ?? 'cross-model') && (a.mode ?? 'standard') === (b.mode ?? 'standard')
 }
 
 /** Whether a review counts under a policy, given who implemented the step. */
@@ -512,7 +535,8 @@ export function qualifies(
   review: RoadmapReview,
 ): boolean {
   if (!implementer) return true
-  if (policy.independence === 'cross-model') return family(review.actor) !== family(implementer.actor)
+  // Cross-model needs a reviewer whose identity a host established: a bare --actor proves nothing.
+  if (policy.independence === 'cross-model') return review.via !== 'declared' && family(review.actor) !== family(implementer.actor)
   if (policy.independence === 'other-session') return review.session !== implementer.session
   return true
 }
@@ -655,7 +679,11 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
           : s.status === 'awaiting'
             ? s.proposed === 'skipped'
               ? ` (a skip awaits the person: ${s.skipReason ?? 'no reason'})`
-              : ' (awaiting the person)'
+              : s.reviewPending
+                ? s.reviewState === 'failed'
+                  ? ' (review failed: fix the findings, then ask for a new review)'
+                  : ' (waits for its review)'
+                : ' (awaiting the person)'
             : s.stale
               ? ' (stale: running, but nobody has been on it for hours — take it over or ask)'
               : ''

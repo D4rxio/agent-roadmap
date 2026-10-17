@@ -59,9 +59,10 @@ export type RoadmapEvent =
       evidence?: string
       note?: string
       /**
-       * How `actor` was established: `claude-code` (the mod's own tool), `codex-sandbox` (the CLI saw
-       * Codex's sandbox), `claude-code-env` (the CLI ran inside Claude Code) or `declared` (`--actor` /
-       * $ROADMAP_ACTOR, unverified). Cross-model independence is as good as this, no better.
+       * How `actor` was established: `claude-code` (the mod's own tool), `process` (the CLI found the
+       * nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the
+       * process tree cannot be read) or `declared` (`--actor` / $ROADMAP_ACTOR, nothing behind it — never
+       * counts as a cross-model review).
        */
       via?: string
     }
@@ -178,6 +179,8 @@ export type RoadmapStep = {
   reviewState?: 'satisfied' | 'missing' | 'failed'
   /** Awaiting because the review its policy requires is still missing (not because of a checkpoint). */
   reviewPending?: boolean
+  /** When a worker last reported it done, if no running has reopened it since: the work a review reviews. */
+  reportedAt?: number
   /** Why this step exists: the problem it solves. */
   why?: string
   /** Its boundaries: what is in, and what must not be touched. */

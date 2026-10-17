@@ -35,6 +35,8 @@ export type ActionContext = {
   focus?: string
   /** How `actor` was established (see the review event's `via`). */
   via?: string
+  /** Which front end writes: the mod's own tools, or the shared CLI. */
+  channel?: 'tool' | 'cli'
   /** What this machine offers for a review by another model, e.g. Codex installed beside Claude. */
   hints?: { codexInstalled?: boolean; cli?: string }
 }
@@ -316,8 +318,13 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
   const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
   if (!ref || !step) return unknownStep(ctx, input.step)
-  if (!step.implementer && step.status !== 'done' && step.status !== 'awaiting') {
-    return refused(`${ref.track}/${ref.id} has no work to review yet: a review counts only after the step is worked on (running or done).`)
+  if (step.reportedAt === undefined) {
+    return refused(
+      `${ref.track}/${ref.id} has no work reported done to review: a review reviews the work a worker last reported done, so record it after that done.`,
+    )
+  }
+  if (ctx.channel === 'cli' && family(ctx.actor) === 'claude') {
+    return refused('Claude records reviews with its own roadmap review tool, where the host vouches for who it is — not through the CLI.')
   }
   const verdict = input.verdict
   if (verdict !== 'pass' && verdict !== 'findings' && verdict !== 'fail') {
@@ -337,9 +344,13 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   }
   const ref2 = `${ref.track}/${ref.id}`
   const s = after(ctx, [ev], ref.track, ref.id)
-  const counts = step.review?.required ? qualifies(step.review, step.implementer, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now }) : true
+  const counts = step.review?.required
+    ? qualifies(step.review, step.implementer, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now, via: ctx.via })
+    : true
   const why = !counts
-    ? step.review?.independence === 'cross-model'
+    ? step.review?.independence === 'cross-model' && ctx.via === 'declared'
+      ? ` It does not satisfy the policy: "${ctx.actor}" is only declared (--actor), with no host behind it, and a cross-model review needs one. Run the review from inside the other model's own tool.`
+      : step.review?.independence === 'cross-model'
       ? ` It does not satisfy the policy: the reviewer (${family(ctx.actor)}) is the same model family as the implementer (${family(step.implementer?.actor)}). Ask another model to review.`
       : ' It does not satisfy the policy: the reviewer is the session that implemented it.'
     : ''
