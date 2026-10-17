@@ -1673,6 +1673,91 @@ test('the pane will not confirm a move that no longer stands, even from a stale 
   await again.unmount()
 })
 
+test('a chat whose plugin code changed on disk says to restart; a file merely touched does not', async ($, on) => {
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: { required: false } }] }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const hooks = [
+    { name: 'model.ts', text: 'export const a = 1', mtimeMs: 1 },
+    { name: 'view.tsx', text: 'export const b = 2', mtimeMs: 1 },
+    { name: 'notes.md', text: 'not code', mtimeMs: 1 },
+  ]
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: e.path.includes('/hooks/') ? (hooks.find(h => e.path.endsWith(`/${h.name}`))?.text ?? '') : (files.get(e.path) ?? '') }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: (e.path ?? '').endsWith('/hooks')
+      ? hooks.map(h => ({ name: h.name, kind: 'file' as const, size: h.text.length, mtimeMs: h.mtimeMs, isLink: false }))
+      : under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-code' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  // The clock ticks only when the test says so.
+  const waiting: (() => void)[] = []
+  on('clock.every', () => new Promise(resolve => waiting.push(() => resolve({ value: undefined }))))
+  const tick = async () => {
+    for (let i = 0; i < 50 && waiting.length === 0; i++) await new Promise(r => setTimeout(r, 5))
+    waiting.shift()?.()
+    for (let i = 0; i < 50 && waiting.length === 0; i++) await new Promise(r => setTimeout(r, 5))
+    await new Promise(r => setTimeout(r, 20))
+  }
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  const band = () =>
+    $.ui.mount({
+      plugin: 'roadmap',
+      surface: 'desktop',
+      component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 5 } } as never,
+    })
+
+  await tick()
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  await ui.unmount()
+  // Touched, not changed: same text, a new time.
+  hooks[0]!.mtimeMs = 2
+  await tick()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  await ui.unmount()
+  // A file that is not code changes: still nothing.
+  hooks[2]!.text = 'still not code, but longer'
+  await tick()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  await ui.unmount()
+  // The code changes: the pane and the band say so.
+  hooks[1]!.text = 'export const b = 3'
+  hooks[1]!.mtimeMs = 3
+  await tick()
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /The roadmap plugin was updated — restart this chat/ })).toBeDefined()
+    await ui.unmount()
+  }
+  const b = await band()
+  expect(await b.find({ text: /restart chat/ })).toBeDefined()
+  await b.unmount()
+  // Put back as it was loaded: nothing to restart for.
+  hooks[1]!.text = 'export const b = 2'
+  hooks[1]!.mtimeMs = 4
+  await tick()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  await ui.unmount()
+})
+
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
   const plan = {
     kind: 'plan',

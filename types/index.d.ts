@@ -282,6 +282,8 @@ declare module 'claude-code' {
       focus: string
       /** Phases this chat opened or closed by hand, `<track>::<phase>` → open; others follow the default. */
       phaseOpen: Record<string, boolean>
+      /** The plugin's code on disk changed since this chat loaded it: a restart loads the new one. */
+      outdated: boolean
     }
   }
 }

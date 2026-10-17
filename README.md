@@ -90,6 +90,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
 - **Needs you.** Checkpoints, proposed skips and moves, and reviews to confirm, each waiting for
   **Confirm / Reject**; failed steps; and steps left running with nobody on them (**◌ stale**).
 - **Working now.** Live sessions and subagents and what each one is doing this moment.
+- **↻ Restart this chat.** A chat keeps the plugin code it started with. When the plugin's files on disk
+  change (a working copy, or a folder in `CLAUDE_CODE_PLUGIN_DIRS`), the pane and the band say so, and a
+  restart loads the new code. A marketplace update installs into a new folder, which a running chat does
+  not watch.
 
 ### Review policy
 

@@ -43,6 +43,51 @@ const tzOffset = atom({ plugin: 'roadmap', key: 'tz' } as const, 0)
 const editing = atom({ plugin: 'roadmap', key: 'editing' } as const, '')
 const focus = atom({ plugin: 'roadmap', key: 'focus' } as const, '')
 const phaseOpen = atom({ plugin: 'roadmap', key: 'phaseOpen' } as const, {} as Record<string, boolean>)
+const outdated = atom({ plugin: 'roadmap', key: 'outdated' } as const, false)
+
+/**
+ * The code this chat loaded. A chat keeps the plugin it started with, so after an update on disk it runs
+ * old code until it restarts; comparing what is on disk now with what was there at start says so. Each
+ * tick lists the hooks folder (cheap); only a changed name, size or time costs a hash of the contents, so
+ * a file merely touched does not count as an update.
+ */
+const code = { sig: '', hash: '' }
+
+async function codeOnDisk($: EngineInterface): Promise<{ sig: string; files: string[] }> {
+  const dir = `${$.plugin.root}/hooks`
+  const files = (await $.fs.list(dir))
+    .filter(x => x.kind === 'file' && /\.(ts|tsx)$/.test(x.name))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  return { sig: files.map(f => `${f.name}:${f.size}:${f.mtimeMs}`).join('|'), files: files.map(f => `${dir}/${f.name}`) }
+}
+
+async function codeHash($: EngineInterface, files: string[]): Promise<string> {
+  // FNV-1a over each file's name and text: a fingerprint, not a security check.
+  let h = 0x811c9dc5
+  for (const path of files) {
+    const text = `${path}\0${await $.fs.read(path)}`
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+  }
+  return (h >>> 0).toString(16)
+}
+
+async function noteCode($: EngineInterface) {
+  const now = await codeOnDisk($)
+  code.sig = now.sig
+  code.hash = await codeHash($, now.files)
+}
+
+async function checkCode($: EngineInterface) {
+  if (!code.hash) return
+  const now = await codeOnDisk($)
+  if (now.sig === code.sig) return
+  code.sig = now.sig
+  const changed = (await codeHash($, now.files)) !== code.hash
+  if (changed !== (await read($, outdated))) await update($, outdated, () => changed)
+}
 
 // The module's own memory of the shared journal; a reload re-reads it from disk.
 const journal = {
@@ -618,6 +663,7 @@ export const register: Register = on => {
       inputSchema: { type: 'object', properties: {} },
     })
 
+    await noteCode($).catch(() => undefined)
     await sync($).catch(() => undefined)
     await republish($)
     // Only when there is a backlog of old loose files; a no-op otherwise.
@@ -628,6 +674,7 @@ export const register: Register = on => {
         // Both run every tick: `||` would skip the heartbeat whenever something else changed.
         const synced = await sync($)
         const beat = await heartbeat($)
+        await checkCode($).catch(() => undefined)
         const changed = synced || beat
         const mine = [...journal.agents.keys()]
         if (mine.length > 0) {
@@ -772,6 +819,7 @@ export const register: Register = on => {
     const tz = await read($, tzOffset)
     return drawPane(els, {
       board: await read($, board),
+      outdated: await read($, outdated),
       richButtons: journal.richButtons,
       view: (await read($, view)) as RoadmapView,
       expanded: await read($, expanded),
@@ -832,6 +880,7 @@ export const register: Register = on => {
       cols: e.props.bodyColumns,
       onToggle: () => void togglePane($),
       focus: await read($, focus),
+      outdated: await read($, outdated),
     })
   })
 }

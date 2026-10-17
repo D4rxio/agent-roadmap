@@ -47,6 +47,8 @@ export type PaneData = {
   onMove: (track: string, id: string, to: string, reason: string) => void
   /** Whether this engine draws styled content inside a Button (2.1.295 on). */
   richButtons: boolean
+  /** The plugin's code changed on disk since this chat loaded it. */
+  outdated?: boolean
 }
 
 type Part = { text: string; color?: string; dim?: boolean; bold?: boolean; strike?: boolean; main?: boolean }
@@ -746,12 +748,20 @@ function backlogView(els: Els, d: PaneData) {
   )
 }
 
+const OUTDATED = '↻ The roadmap plugin was updated — restart this chat to load it.'
+
 export function drawPane(els: Els, d: PaneData) {
   const { Box, Text } = els
+  const stale = d.outdated ? (
+    <Text color="warning" wrap="truncate-end">
+      {OUTDATED}
+    </Text>
+  ) : null
   if (d.board.tracks.length === 0 && d.board.sessions.length === 0) {
     return (
       <Box flexDirection="column">
         {header(els, d)}
+        {stale}
         <Text dimColor>No tracks yet. Ask Claude to lay one out, e.g. "add a roadmap track for the API work".</Text>
       </Box>
     )
@@ -759,6 +769,7 @@ export function drawPane(els: Els, d: PaneData) {
   return (
     <Box flexDirection="column">
       {header(els, d)}
+      {stale}
       {thisChat(els, d)}
       {needsYou(els, d)}
       {d.view === 'days'
@@ -777,7 +788,7 @@ export function drawPane(els: Els, d: PaneData) {
 /** One line above the prompt: the tracks at a glance and the pane's toggle. */
 export function drawBand(
   els: Els,
-  d: { board: RoadmapBoard; isOpen: boolean; cols: number; onToggle: () => void; focus?: string },
+  d: { board: RoadmapBoard; isOpen: boolean; cols: number; onToggle: () => void; focus?: string; outdated?: boolean },
 ) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
@@ -809,6 +820,7 @@ export function drawBand(
         )}
       </Box>
       {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length}`}</Text> : null}
+      {d.outdated ? <Text color="warning">↻ restart chat</Text> : null}
     </Box>
   )
 }
