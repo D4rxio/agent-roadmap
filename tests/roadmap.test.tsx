@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
-import { chainSvg } from '../hooks/view'
+import { chainSvg, whoseReview } from '../hooks/view'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
@@ -2448,6 +2448,15 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
   await later.unmount()
 })
 
+test('the pane names whose review is owed: the other model by name, else in general terms', async () => {
+  const cross = { required: true, independence: 'cross-model' }
+  expect(whoseReview({ review: cross, implementer: { actor: 'claude' } })).toBe("Codex's review")
+  expect(whoseReview({ review: cross, implementer: { actor: 'codex' } })).toBe("Claude's review")
+  expect(whoseReview({ review: cross, implementer: { actor: 'gemini' } })).toBe("another model's review")
+  expect(whoseReview({ review: { independence: 'other-session' } })).toBe('a review from another chat')
+  expect(whoseReview({ review: { independence: 'any' } })).toBe('a review')
+})
+
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
   const plan = {
     kind: 'plan',
@@ -2489,8 +2498,8 @@ test('the pane shows a review owed and offers the person to confirm without it',
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ text: /waits for a cross-model review \(not claude\)/ })).toBeDefined()
-    expect(await ui.find({ text: /Confirm without review/ })).toBeDefined()
+    expect(await ui.find({ text: /waits for Codex's review — a model other than claude must review it/ })).toBeDefined()
+    expect(await ui.find({ text: /Confirm without Codex's review/ })).toBeDefined()
     await ui.press({ key: 'fold-api' })
     expect(await ui.find({ text: /review owed/ })).toBeDefined()
     await ui.press({ key: 'fold-api' })
@@ -2498,7 +2507,7 @@ test('the pane shows a review owed and offers the person to confirm without it',
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'ok-api-1' })
-  expect(await ui.find({ text: /Confirm without review/ })).toBe(undefined)
+  expect(await ui.find({ text: /Confirm without/ })).toBe(undefined)
   expect(await ui.find({ text: /100%/ })).toBeDefined()
   await ui.unmount()
 })
@@ -2546,7 +2555,7 @@ test('the pane shows a cross-model pass with its reviewer, for the person to con
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ text: /pass by codex \(codex-sandbox\) — no findings/ })).toBeDefined()
-    expect(await ui.find({ text: /Confirm without review/ })).toBe(undefined)
+    expect(await ui.find({ text: /Confirm without/ })).toBe(undefined)
     expect(await ui.find({ text: /Confirm ✓/ })).toBeDefined()
     await ui.press({ key: 'fold-api' })
     expect(await ui.find({ text: /reviewed · to confirm/ })).toBeDefined()

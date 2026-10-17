@@ -129,6 +129,19 @@ function thisChat(els: Els, d: PaneData) {
   )
 }
 
+/**
+ * Whose review a step waits for, in words a person reads at a glance: the other model's by name where
+ * the pair is known (Claude's work → Codex's review, and the other way round), else in general terms.
+ * Your own confirmation is not a review here — it always comes last.
+ */
+export function whoseReview(s: { review?: { independence?: string }; implementer?: { actor: string } }): string {
+  if (s.review?.independence === 'cross-model') {
+    const done = family(s.implementer?.actor)
+    return done === 'claude' ? "Codex's review" : done === 'codex' ? "Claude's review" : "another model's review"
+  }
+  return s.review?.independence === 'other-session' ? 'a review from another chat' : 'a review'
+}
+
 /** A click on the priority chip raises it: none → P3 → P2 → P1 → P0 → none. */
 export function nextPriority(p: RoadmapPriority | undefined): RoadmapPriority | null {
   if (!p) return 'P3'
@@ -602,7 +615,7 @@ function needsYou(els: Els, d: PaneData) {
             { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
           ])}
           {st.reviewPending ? (
-            <Text dimColor wrap="truncate-end">{`   waits for ${st.review?.independence === 'cross-model' ? `a cross-model review (not ${family(st.implementer?.actor)})` : 'an independent review'}${st.reviewState === 'failed' ? ' — the last one failed' : ''}`}</Text>
+            <Text dimColor wrap="truncate-end">{`   waits for ${whoseReview(st)}${st.review?.independence === 'cross-model' ? ` — a model other than ${family(st.implementer?.actor)} must review it` : ''}${st.reviewState === 'failed' ? '; the last one failed' : ''}`}</Text>
           ) : st.reviewState === 'reviewed' && st.passedReview ? (
             <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
           ) : st.proposed === 'moved' ? (
@@ -628,7 +641,15 @@ function needsYou(els: Els, d: PaneData) {
                     : d.onDecide(st.track, st.id, 'done')
               }
             >
-              {st.proposed === 'skipped' ? 'Confirm skip' : st.proposed === 'moved' ? 'Confirm move' : st.reviewPending ? 'Confirm without review' : 'Confirm ✓'}
+              {st.proposed === 'skipped'
+                ? 'Confirm skip'
+                : st.proposed === 'moved'
+                  ? 'Confirm move'
+                  : st.reviewPending
+                    ? st.reviewState === 'failed'
+                      ? 'Confirm despite the failed review'
+                      : `Confirm without ${whoseReview(st)}`
+                    : 'Confirm ✓'}
             </Button>
             )}
             <Button

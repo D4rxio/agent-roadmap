@@ -15,6 +15,9 @@ versions follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - **A clearer pane.** What is shown (the track, the project) stands out; its actions are dimmed.
 - **The text tree indents only at a fork**, so a long chain reads down the page.
+- **Needs you names whose review is owed.** "Confirm without Codex's review" (or Claude's, or another
+  chat's) instead of a bare "Confirm without review" — your confirmation always comes last; and
+  "Confirm despite the failed review" after a failed one.
 
 ### Fixed
 - A chain through two other tracks no longer breaks in two; this chat's finished step is never folded
