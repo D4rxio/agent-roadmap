@@ -271,21 +271,31 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       // work) needs a new review; a review written before the work, or in the same millisecond, never counts.
       const lastRun = [...said].reverse().find(w => w.status === 'running')
       const lastDone = [...work].reverse().find(w => w.status === 'done')
-      step.reportedAt = lastDone && lastDone.at >= (lastRun?.at ?? Number.NEGATIVE_INFINITY) ? lastDone.at : undefined
+      // A running in the same millisecond as the done may have reopened it: unsure, so no review counts.
+      step.reportedAt = lastDone && lastDone.at > (lastRun?.at ?? Number.NEGATIVE_INFINITY) ? lastDone.at : undefined
       const since = step.reportedAt ?? Number.POSITIVE_INFINITY
       step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at > since).sort((a, b) => a.at - b.at)
       if (step.review?.required) {
         const counted = step.reviews.filter(r => qualifies(step.review!, step.implementer, r))
         const latestAt = counted.length ? counted[counted.length - 1]!.at : undefined
         const latest = counted.filter(r => r.at === latestAt)
-        step.reviewState = !latest.length ? 'missing' : latest.some(r => r.verdict === 'fail') ? 'failed' : 'satisfied'
+        // A cross-model pass is a report to the person, never a close: any process here can claim to
+        // be another model (`codex sandbox` runs anything as Codex), so only the person's confirm closes it.
+        step.reviewState = !latest.length
+          ? 'missing'
+          : latest.some(r => r.verdict === 'fail')
+            ? 'failed'
+            : step.review.independence === 'cross-model'
+              ? 'reviewed'
+              : 'satisfied'
+        step.passedReview = step.reviewState === 'reviewed' || step.reviewState === 'satisfied' ? latest[latest.length - 1] : undefined
         // A worker's done waits for a qualifying review; the person's own done is final (an override).
         const doneWord = [...said].reverse().find(w => w.status === 'done')
         if (status === 'done' && doneWord && doneWord.origin !== 'person' && step.reviewState !== 'satisfied') {
           status = 'awaiting'
           step.proposed = 'done'
         }
-        step.reviewPending = status === 'awaiting' && step.reviewState !== 'satisfied' && step.proposed === 'done'
+        step.reviewPending = status === 'awaiting' && (step.reviewState === 'missing' || step.reviewState === 'failed') && step.proposed === 'done'
       }
       const latest = said[said.length - 1]
       if (!latest) continue
@@ -636,7 +646,9 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
         }. ${
           s.reviewState === 'satisfied'
             ? 'A qualifying review passed.'
-            : s.reviewState === 'failed'
+            : s.reviewState === 'reviewed'
+              ? `A cross-model review passed (${s.passedReview?.actor ?? 'another model'}${s.passedReview?.via ? `, via ${s.passedReview.via}` : ''}); the person confirms it in the Roadmap pane — no agent can prove which model wrote a review.`
+              : s.reviewState === 'failed'
               ? 'The last qualifying review FAILED: fix the findings, then get it reviewed again.'
               : 'No qualifying review yet: a worker\'s done waits for one.'
         }`
@@ -683,12 +695,14 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
                 ? s.reviewState === 'failed'
                   ? ' (review failed: fix the findings, then ask for a new review)'
                   : ' (waits for its review)'
-                : ' (awaiting the person)'
+                : s.reviewState === 'reviewed'
+                  ? ` (reviewed by ${s.passedReview?.actor ?? 'another model'}: the person confirms)`
+                  : ' (awaiting the person)'
             : s.stale
               ? ' (stale: running, but nobody has been on it for hours — take it over or ask)'
               : ''
       const rv =
-        s.review?.required && s.reviewState !== 'satisfied'
+        s.review?.required && s.reviewState !== 'satisfied' && s.reviewState !== 'reviewed'
           ? ` [${policyText(s.review)}${s.review.independence === 'cross-model' && s.implementer ? `: reviewer ≠ ${family(s.implementer.actor)}` : ''}${s.reviewState === 'failed' ? '; last review failed' : ''}]`
           : ''
       lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${rv}${why}`)

@@ -88,7 +88,12 @@ export function readPolicy(raw: unknown): { policy?: RoadmapReviewPolicy; error?
 }
 
 /** What an agent is told about a step that waits: for a review its policy requires, or for the person. */
-function waiting(s: { reviewPending?: boolean; reviewState?: string; review?: { independence?: string }; implementer?: { actor: string } } | undefined): string {
+function waiting(
+  s: { reviewPending?: boolean; reviewState?: string; passedReview?: { actor: string }; review?: { independence?: string }; implementer?: { actor: string } } | undefined,
+): string {
+  if (s?.reviewState === 'reviewed' && !s.reviewPending) {
+    return `reviewed by ${s.passedReview?.actor ?? 'another model'}; awaiting the person's confirmation (a cross-model review is confirmed by the person)`
+  }
   if (s?.reviewPending) {
     const who = s.review?.independence === 'cross-model' ? `a cross-model review (the reviewer must not be ${family(s.implementer?.actor)})` : 'an independent review'
     return s.reviewState === 'failed'
@@ -354,7 +359,12 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
       ? ` It does not satisfy the policy: the reviewer (${family(ctx.actor)}) is the same model family as the implementer (${family(step.implementer?.actor)}). Ask another model to review.`
       : ' It does not satisfy the policy: the reviewer is the session that implemented it.'
     : ''
-  const state = s?.status === 'done' ? 'done' : s?.status === 'awaiting' ? `awaiting (${s.reviewPending ? 'review still owed' : 'the person confirms'})` : s?.status
+  const state =
+    s?.status === 'done'
+      ? 'done'
+      : s?.status === 'awaiting'
+        ? `awaiting (${s.reviewPending ? 'review still owed' : s.reviewState === 'reviewed' ? 'reviewed: a cross-model review is confirmed by the person in the Roadmap pane' : 'the person confirms'})`
+        : s?.status
   return {
     ok: true,
     text: `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.`,

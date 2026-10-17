@@ -21,8 +21,8 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   Re-laying keeps statuses and the person's own items; a plan with a dependency loop is refused.
 - **Reviewing**: when asked to review a step (often another model's work), check it against the step's
   brief, then record the verdict yourself: `$R review <track>/<id> --verdict pass|findings|fail --evidence "what you checked"`.
-  A step with a cross-model policy counts as done only after a different model family reviews it, and a
-  review counts for the work last reported done (a new done needs a new review). The CLI records you as
+  A step with a cross-model policy needs a review by a different model family for the work last reported
+  done (a new done needs a new review); its pass then waits for the person to confirm. The CLI records you as
   `codex` from inside Codex whatever `--actor` says; a bare `--actor` never counts as cross-model.
 - **Laying out new steps**: every new step needs a review policy (on the step or as the track's default),
   e.g. `"review": { "required": true, "independence": "cross-model", "mode": "adversarial" }`.

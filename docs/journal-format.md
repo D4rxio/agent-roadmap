@@ -55,17 +55,22 @@ Any tool may read it, and append to it under the same rules, so other agents and
   strictest it ever was. A plan can raise it. A re-laid plan that omits `review` keeps what is in force.
 - A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` meets the
   policy with `pass` or `findings`. A review reviews the work last reported done: it counts only if written
-  strictly after the worker's latest `done`, while no `running` has reopened the work. Each new `done` is
-  new work and needs a new review. A qualifying `fail` keeps it out; of qualifying reviews in the same
-  millisecond a `fail` wins. The person's own `done` is final.
+  strictly after the worker's latest `done`, while no `running` has reopened the work (a `running` in the
+  same millisecond as the `done` counts as reopening it). Each new `done` is new work and needs a new
+  review. A qualifying `fail` keeps it out; of qualifying reviews in the same millisecond a `fail` wins.
+  The person's own `done` is final.
+- **A cross-model pass never closes a step by itself.** It leaves the step `awaiting` the person, with
+  the review shown (who, verdict, `via`, evidence); the person's confirm closes it. On one machine and
+  account no agent can prove which model wrote a review — `codex sandbox` runs any command exactly as a
+  Codex session would, and the implementer's own reports are no better attested — so the person is the
+  one who vouches. `any` and `other-session` policies close on a qualifying pass as before.
 - A review is written by the reviewer itself, under its own `session` and `actor`, with `via` saying how
   the actor was established: `claude-code` (the mod's own tool, run by the host), `process` (the CLI found
   the nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the process
   tree cannot be read, `$CODEX_SANDBOX`) or `declared` (`--actor`, nothing behind it). A `declared` review
   never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
-  review as Claude — Claude reviews through its own tool. This makes a forged identity a deliberate act,
-  not an accident; it does not make one impossible: the journal is a local, single-user directory, and
-  anyone who writes its files by hand can write anything. The person's confirmation stays the authority.
+  review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
+  accident; it does not prove them, which is why a cross-model pass waits for the person.
 - `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.

@@ -176,7 +176,12 @@ export type RoadmapStep = {
   /** Reviews recorded since the current attempt started, oldest first. */
   reviews: RoadmapReview[]
   /** `satisfied` once a qualifying review passed; `missing` while one is owed; `failed` after a qualifying fail. */
-  reviewState?: 'satisfied' | 'missing' | 'failed'
+  reviewState?: 'satisfied' | 'missing' | 'failed' | 'reviewed'
+  /**
+   * The qualifying review that passed, if one did. Under a cross-model policy a pass is `reviewed`, not
+   * `satisfied`: no agent on this machine can prove which model wrote a review, so the person confirms.
+   */
+  passedReview?: RoadmapReview
   /** Awaiting because the review its policy requires is still missing (not because of a checkpoint). */
   reviewPending?: boolean
   /** When a worker last reported it done, if no running has reopened it since: the work a review reviews. */

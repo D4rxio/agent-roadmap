@@ -1279,8 +1279,15 @@ test('review policy: a worker\'s done waits for a review that meets it; cross-mo
   // Another Claude session's review does not count for cross-model …
   expect(get([...impl, review(4, 'claude', 'c2', 'pass')])?.status).toBe('awaiting')
   // … Codex's does: done.
-  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.status).toBe('done')
-  expect(get([...impl, review(4, 'codex', 'x1', 'findings')])?.status).toBe('done')
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.reviewState).toBe('reviewed')
+  expect(get([...impl, review(4, 'codex', 'x1', 'findings')])?.reviewState).toBe('reviewed')
+  // A cross-model pass is a report, not a close: no agent can prove which model wrote it, so it waits
+  // for the person — whose confirm closes it.
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.status).toBe('awaiting')
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.reviewPending).toBe(false)
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.passedReview?.actor).toBe('codex')
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass'), work(5, '1', 'done', 'person', 'p', 'person')])?.status).toBe('done')
+  expect(summary(fold([...impl, review(4, 'codex', 'x1', 'pass')], [], 9999))).toContain('reviewed by codex: the person confirms')
   // A failed review keeps it out, and says so.
   expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.reviewState).toBe('failed')
   expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.status).toBe('awaiting')
@@ -1290,7 +1297,7 @@ test('review policy: a worker\'s done waits for a review that meets it; cross-mo
   expect(get([...impl, work(4, '1', 'done', 'person', 'p', 'person')])?.status).toBe('done')
   // Symmetric: Codex implements, Claude reviews.
   const byCodex = [plan, work(2, '1', 'running', 'codex', 'x1'), work(3, '1', 'done', 'codex', 'x1'), review(4, 'claude', 'c1', 'pass')]
-  expect(get(byCodex)?.status).toBe('done')
+  expect(get(byCodex)?.reviewState).toBe('reviewed')
   // A step that opts out is done as usual.
   expect(get([plan, work(2, '2', 'done', 'claude', 'c1')], '2')?.status).toBe('done')
   // other-session: the same family from another session counts; the implementing session does not.
@@ -1336,7 +1343,7 @@ test('new steps must carry a review policy; existing ones may go without; Codex 
   expect(own.text).toContain('does not satisfy the policy')
   const codex = reviewAction(ctx(reported, { actor: 'codex', session: 'x1', now: 5003 }), { step: 'api/1', verdict: 'pass', evidence: 'no findings' })
   expect(codex.text).not.toContain('does not satisfy')
-  expect(codex.text).toContain('The step is done')
+  expect(codex.text).toContain('confirmed by the person')
   expect(reviewAction(ctx(reported, { now: 5003 }), { step: 'api/1', verdict: 'maybe' }).ok).toBe(false)
 })
 
@@ -1372,7 +1379,7 @@ test('review policy holds up: a re-lay keeps it, an earlier review does not coun
   expect(reviewAction(ctx([plan], { actor: 'codex', session: 'x1' }), { step: 'api/1', verdict: 'pass' }).ok).toBe(false)
   expect(get([plan, review(2, 'codex', 'pass'), work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1')])?.status).toBe('awaiting')
   expect(get([plan, review(2, 'codex', 'pass'), work(4, 'done', 'claude', 'c1')])?.status).toBe('awaiting')
-  expect(get([plan, work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1'), review(5, 'codex', 'pass')])?.status).toBe('done')
+  expect(get([plan, work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1'), review(5, 'codex', 'pass')])?.reviewState).toBe('reviewed')
 
   // 3. `review: {}` is not a policy: `required` must be said.
   const empty = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: {} }] }] })
@@ -1388,9 +1395,12 @@ test('review policy holds up: a re-lay keeps it, an earlier review does not coun
     expect(get(events)?.reviewState).toBe('failed')
     expect(get(events)?.status).toBe('awaiting')
   }
+  // A done and a running in one millisecond: whether the work was reopened is unknown, so the review
+  // does not count, read in either order.
   const sameMs = [plan, work(3, 'running', 'claude', 'c1'), work(3, 'done', 'claude', 'c1'), review(4, 'codex', 'pass')]
-  expect(get(sameMs)?.status).toBe('done')
-  expect(get([...sameMs].reverse())?.status).toBe('done')
+  expect(get(sameMs)?.status).toBe('awaiting')
+  expect(get([...sameMs].reverse())?.status).toBe('awaiting')
+  expect(get([plan, work(2, 'running', 'claude', 'c1'), work(3, 'done', 'claude', 'c1'), work(3, 'running', 'claude', 'c1'), review(4, 'codex', 'pass')])?.reviewState).toBe('missing')
   // An agent that starts and ends in one millisecond ends, whichever file is read first.
   const start = { kind: 'agent', at: 7, session: 's2', agentId: 'a1', description: 'x', type: 'Explore' } as RoadmapEvent
   const end = { kind: 'agent-end', at: 7, session: 's2', agentId: 'a1', status: 'done' } as RoadmapEvent
@@ -1431,18 +1441,18 @@ test('review policy, second round: no plan sheds a policy, each done needs its r
   expect(get([...reported, ...dropped, ...readded])?.status).toBe('awaiting')
 
   // C. Each done is new work: a pass on version 1 does not cover version 2.
-  expect(get([...reported, review(4, 'pass')])?.status).toBe('done')
+  expect(get([...reported, review(4, 'pass')])?.reviewState).toBe('reviewed')
   expect(get([...reported, review(4, 'pass'), work(5, 'done')])?.status).toBe('awaiting')
-  expect(get([...reported, review(4, 'pass'), work(5, 'done'), review(6, 'pass')])?.status).toBe('done')
+  expect(get([...reported, review(4, 'pass'), work(5, 'done'), review(6, 'pass')])?.reviewState).toBe('reviewed')
   // … and a review while the work is reopened (running) counts for nothing.
   expect(get([...reported, work(4, 'running'), review(5, 'pass'), work(6, 'done')])?.status).toBe('awaiting')
   expect(reviewAction(ctx([...reported, work(4, 'running')], { actor: 'codex', session: 'x1', via: 'process', channel: 'cli', now: 6 }), { step: 'api/1', verdict: 'pass' }).ok).toBe(false)
 
   // D. A declared actor never satisfies cross-model; a host-established one does; pre-`via` reviews still count.
   expect(get([...reported, review(4, 'pass', 'declared')])?.status).toBe('awaiting')
-  expect(get([...reported, review(4, 'pass', 'process')])?.status).toBe('done')
-  expect(get([...reported, review(4, 'pass', 'codex-sandbox')])?.status).toBe('done')
-  expect(get([...reported, review(4, 'pass')])?.status).toBe('done')
+  expect(get([...reported, review(4, 'pass', 'process')])?.reviewState).toBe('reviewed')
+  expect(get([...reported, review(4, 'pass', 'codex-sandbox')])?.reviewState).toBe('reviewed')
+  expect(get([...reported, review(4, 'pass')])?.reviewState).toBe('reviewed')
   const declared = reviewAction(ctx(reported, { actor: 'gemini', session: 'g1', via: 'declared', channel: 'cli', now: 6 }), { step: 'api/1', verdict: 'pass' })
   expect(declared.text).toContain('only declared')
   // The CLI never records a review as Claude: Claude reviews through its own tool.
@@ -1510,6 +1520,63 @@ test('the pane shows a review owed and offers the person to confirm without it',
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'ok-api-1' })
   expect(await ui.find({ text: /Confirm without review/ })).toBe(undefined)
+  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the pane shows a cross-model pass with its reviewer, for the person to confirm', async ($, on) => {
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    review: { required: true, independence: 'cross-model' },
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence' }] }],
+  }
+  const events = [
+    plan,
+    { kind: 'step', at: 1100, session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1200, session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+    { kind: 'review', at: 1300, session: 'x1', track: 'api', id: '1', actor: 'codex', verdict: 'pass', via: 'codex-sandbox', evidence: 'no findings' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-eighteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /pass by codex \(codex-sandbox\) — no findings/ })).toBeDefined()
+    expect(await ui.find({ text: /Confirm without review/ })).toBe(undefined)
+    expect(await ui.find({ text: /Confirm ✓/ })).toBeDefined()
+    await ui.press({ key: 'fold-api' })
+    expect(await ui.find({ text: /reviewed · to confirm/ })).toBeDefined()
+    await ui.press({ key: 'fold-api' })
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'ok-api-1' })
+  expect(await ui.find({ text: /Confirm ✓/ })).toBe(undefined)
   expect(await ui.find({ text: /100%/ })).toBeDefined()
   await ui.unmount()
 })
