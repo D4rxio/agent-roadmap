@@ -903,9 +903,18 @@ export type ChainNode = {
   row: number
   /** The project it lies in, when the graph shows another one's chains (a dependency across projects). */
   external?: string
+  /** With one track in focus: a step of another track it waits on, or that waits on it. */
+  foreign?: boolean
 }
 export type ChainEdge = { from: string; to: string; moved: boolean; critical: boolean }
-export type ChainGraph = { nodes: ChainNode[]; edges: ChainEdge[]; layers: number; rows: number }
+export type ChainGraph = {
+  nodes: ChainNode[]
+  edges: ChainEdge[]
+  layers: number
+  rows: number
+  /** With one track in focus: its finished steps left out (they lead to nothing still open). */
+  hidden?: number
+}
 
 /**
  * The dependency graph of a board as boxes and arrows: every step that waits on another or is waited on
@@ -913,7 +922,7 @@ export type ChainGraph = { nodes: ChainNode[]; edges: ChainEdge[]; layers: numbe
  * where its obligation went. Columns follow the longest path of prerequisites, so a chain reads left to
  * right; the longest chain of open steps is marked. Sets aside backlog and archived tracks. No time axis.
  */
-export function chainGraph(board: RoadmapBoard, project?: string): ChainGraph {
+export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?: string } = {}): ChainGraph {
   // `board` is the whole board, so a chain crossing into another project keeps its arrows; `project` keeps
   // the chains that touch that project's (or unplaced) steps and marks the steps of other projects.
   const scope = project && project !== '*' ? project : undefined
@@ -956,6 +965,42 @@ export function chainGraph(board: RoadmapBoard, project?: string): ChainGraph {
     }
     edges.splice(0, edges.length, ...edges.filter(e => keep.has(e.from) && keep.has(e.to)))
   }
+  // One track in focus: its steps in some chain, and the steps of other tracks right next to them. Its
+  // finished steps that lead to nothing still open are folded away, so the picture shows the road ahead.
+  let hidden = 0
+  if (opts.track) {
+    const mine = (ref: string) => steps.get(ref)?.t.name === opts.track
+    const live = (ref: string) => {
+      const x = steps.get(ref)?.s
+      return !!x && OPEN.includes(x.status)
+    }
+    const touches = (ref: string) => edges.some(e => (e.from === ref && live(e.to)) || (e.to === ref && live(e.from)))
+    const own = new Set(edges.flatMap(e => [e.from, e.to]).filter(mine))
+    const kept = new Set([...own].filter(ref => live(ref) || touches(ref)))
+    hidden = own.size - kept.size
+    const near = edges.filter(e => (kept.has(e.from) && !mine(e.to)) || (kept.has(e.to) && !mine(e.from))).flatMap(e => [e.from, e.to])
+    for (const ref of near) kept.add(ref)
+    edges.splice(0, edges.length, ...edges.filter(e => kept.has(e.from) && kept.has(e.to) && (mine(e.from) || mine(e.to))))
+  }
+  // An arrow that a longer path already implies (A → B → C makes A → C redundant) is dropped: the picture
+  // shows each dependency once, and the order of steps and the longest chain stay the same.
+  const plain = edges.filter(e => !e.moved)
+  const reaches = (from: string, to: string, skip: ChainEdge) => {
+    const seen = new Set<string>()
+    const stack = [from]
+    while (stack.length) {
+      const r = stack.pop()!
+      for (const e of plain) {
+        if (e === skip || e.from !== r || seen.has(e.to)) continue
+        if (e.to === to) return true
+        seen.add(e.to)
+        stack.push(e.to)
+      }
+    }
+    return false
+  }
+  const redundant = new Set(plain.filter(e => reaches(e.from, e.to, e)))
+  edges.splice(0, edges.length, ...edges.filter(e => !redundant.has(e)))
   const projectName = (key: string) => (board.projects ?? []).find(p => p.key === key)?.name ?? projectLabel(key)
   const used = new Set(edges.flatMap(e => [e.from, e.to]))
   const into = new Map<string, string[]>()
@@ -1014,10 +1059,11 @@ export function chainGraph(board: RoadmapBoard, project?: string): ChainGraph {
     const row = rowsIn.get(l) ?? 0
     rowsIn.set(l, row + 1)
     const external = scope && t.project && t.project !== scope ? projectName(t.project) : undefined
-    return { ref, track: t.name, id: s.id, title: s.title, status: s.status, checkpoint: s.checkpoint, next: t.next === ref, critical: critical.has(ref), layer: l, row, external }
+    const foreign = opts.track !== undefined && t.name !== opts.track
+    return { ref, track: t.name, id: s.id, title: s.title, status: s.status, checkpoint: s.checkpoint, next: t.next === ref, critical: critical.has(ref), layer: l, row, external, foreign }
   })
   edges.sort((a, b) => byPlace(a.from, b.from) || byPlace(a.to, b.to))
-  return { nodes, edges, layers: Math.max(0, ...nodes.map(n => n.layer + 1)), rows: Math.max(0, ...rowsIn.values()) }
+  return { nodes, edges, layers: Math.max(0, ...nodes.map(n => n.layer + 1)), rows: Math.max(0, ...rowsIn.values()), hidden }
 }
 
 /** A node id Mermaid accepts, stable for the same step: letters, digits and underscores only. */

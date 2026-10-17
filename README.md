@@ -87,9 +87,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
   - **⧉ Copy as Markdown** copies one track.
 - **Days.** Steps done per day over the last two weeks, and what happened each day: done, started,
   sessions, agents.
-- **Chains.** What waits on what, as boxes and arrows read left to right, across tracks: each step in its
-  status colours, the next step outlined, the longest open chain in bold, a moved step's arrow dashed (a
-  text tree in the terminal). No dates, no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
+- **Chains.** One track at a time — this chat's by default, the others a click away — as boxes and arrows
+  read top to bottom: the road ahead (finished steps that lead to nothing open are folded away), each
+  dependency drawn once, the steps of other tracks it touches dashed, the next step outlined, the longest
+  open chain in bold (a text tree in the terminal). No dates, no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
   ```` ```mermaid ```` block that GitHub, GitLab and Gitea render — paste it into a PR, an issue or a doc.
 - **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
   **↺ Unarchive**.

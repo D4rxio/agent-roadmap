@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
+import { chainSvg } from '../hooks/view'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
@@ -2264,6 +2265,41 @@ test('chains, second round: set-aside tracks count nowhere, chains cross project
   expect(arrow[0]).not.toBe(arrow[2])
 })
 
+test('chains, one track at a time: its road ahead, its neighbours, no shortcuts, never too wide', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, steps: object[]) => ({ kind: 'plan', at, session: 's', track, phases: [{ name: 'P', steps: steps.map(x => ({ review: off, ...x })) }] }) as RoadmapEvent
+  const done = (at: number, track: string, id: string) => ({ kind: 'step', at, session: 'p', track, id, status: 'done', origin: 'person', actor: 'person' }) as RoadmapEvent
+  const events = [
+    plan(1, 'a', [
+      { id: '0', title: 'Long done' }, { id: '1', title: 'Done base', blockedBy: ['0'] }, { id: '2', title: 'Open', blockedBy: ['1'] },
+      { id: '3', title: 'Then', blockedBy: ['2', '1'] }, { id: '4', title: 'Side', blockedBy: ['2'] }, { id: '5', title: 'Side 2', blockedBy: ['2'] },
+    ]),
+    plan(2, 'b', [{ id: '1', title: 'Vendor' }, { id: '2', title: 'Far away', blockedBy: ['1'] }]),
+    plan(3, 'c', [{ id: '1', title: 'Uses a/3', blockedBy: ['a/3'] }]),
+    plan(4, 'x', [{ id: '1', title: 'X', blockedBy: ['b/1'] }]),
+    done(5, 'a', '0'),
+    done(6, 'a', '1'),
+  ]
+  const board = fold(events, [], 99)
+  const g = chainGraph(board, undefined, { track: 'a' })
+  const refs = g.nodes.map(n => n.ref)
+  // The done step that leads to an open one stays (context); the one before it folds away.
+  expect(refs).toContain('a/1')
+  expect(refs).not.toContain('a/0')
+  expect(g.hidden).toBe(1)
+  // A neighbour in another track is shown, marked; a step two tracks away is not.
+  expect(g.nodes.find(n => n.ref === 'c/1')?.foreign).toBe(true)
+  expect(refs).not.toContain('b/1')
+  // a/1 → a/3 is implied by a/1 → a/2 → a/3: drawn once, through a/2.
+  expect(g.edges.some(e => e.from === 'a/1' && e.to === 'a/3')).toBe(false)
+  expect(g.edges.some(e => e.from === 'a/2' && e.to === 'a/3')).toBe(true)
+  // Three steps side by side wrap to the pane's width instead of widening the picture.
+  const narrow = chainSvg(g, { maxAcross: 1 })
+  const wide = chainSvg(g, { maxAcross: 3 })
+  expect(narrow.width).toBeLessThan(wide.width)
+  expect(narrow.height).toBeGreaterThan(wide.height)
+})
+
 test('the Chains tab draws the graph (a text tree in the terminal) and copies it as Mermaid', async ($, on) => {
   const off = { required: false }
   const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [
@@ -2300,9 +2336,16 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
   })
   on('session.start', (_$, e) => e)
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  // A second track with a chain: the tab offers both, one at a time, starting with this chat's.
+  files.set('/home/t/.claude/roadmap/events/1001-o-x.json', JSON.stringify({ kind: 'plan', at: 1001, session: 's', track: 'web', title: 'Web', phases: [{ name: 'P', steps: [{ id: '1', title: 'Page', review: off }, { id: '2', title: 'Form', blockedBy: ['1'], review: off }] }] }))
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'view-chains' })
+    expect(await ui.find({ text: /\[api\]/ })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ text: /web\/2 Form/ })).toBe(undefined)
+    await ui.press({ key: 'chain-track-1' })
+    if (surface === 'terminal') expect(await ui.find({ text: /→ ⊘ web\/2 Form/ })).toBeDefined()
+    await ui.press({ key: 'chain-track-0' })
     expect(await ui.find({ text: /Copy as Mermaid/ })).toBeDefined()
     if (surface === 'terminal') {
       expect(await ui.find({ text: /→ ⊘ api\/2 Client/ })).toBeDefined()

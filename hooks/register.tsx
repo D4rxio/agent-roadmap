@@ -47,6 +47,7 @@ const phaseOpen = atom({ plugin: 'roadmap', key: 'phaseOpen' } as const, {} as R
 const outdated = atom({ plugin: 'roadmap', key: 'outdated' } as const, false)
 /** Which project the pane shows: '' this chat's own, '*' every project, or a project's key. */
 const projectView = atom({ plugin: 'roadmap', key: 'project' } as const, '')
+const chainTrack = atom({ plugin: 'roadmap', key: 'chainTrack' } as const, '')
 
 /**
  * The project a folder belongs to: its main repository's folder, found through git's common dir so every
@@ -121,6 +122,14 @@ async function readPhaseOpen($: EngineInterface): Promise<Record<string, boolean
 async function readEditing($: EngineInterface): Promise<string> {
   try {
     return (await read($, editing)) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+async function readChainTrack($: EngineInterface): Promise<string> {
+  try {
+    return (await read($, chainTrack)) ?? ''
   } catch {
     return ''
   }
@@ -899,6 +908,9 @@ export const register: Register = on => {
       return drawPane(els, {
         board: forProject(await read($, board), shown),
         whole: await read($, board),
+        chainTrack: await readChainTrack($),
+        chatTrack: journal.track,
+        onChainTrack: (t: string) => void update($, chainTrack, () => t).catch(() => undefined),
         project: shown,
         here: journal.project,
         onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),

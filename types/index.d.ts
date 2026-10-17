@@ -331,6 +331,8 @@ declare module 'claude-code' {
       outdated: boolean
       /** Which project the pane shows: '' this chat's own, '*' every project, or a project's key. */
       project: string
+      /** The track the Chains tab shows in this chat ('' : this chat's own). */
+      chainTrack: string
     }
   }
 }

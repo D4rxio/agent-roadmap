@@ -1,6 +1,6 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
 import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
-import type { ChainGraph } from './model'
+import type { ChainGraph, ChainNode } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Els = Record<string, any>
@@ -12,6 +12,11 @@ export type PaneData = {
   board: RoadmapBoard
   /** The whole board, every project: what the Chains tab draws from (a chain may cross projects). */
   whole?: RoadmapBoard
+  /** The track the Chains tab shows, as picked in this chat (else this chat's own). */
+  chainTrack?: string
+  /** The track this chat last worked in. */
+  chatTrack?: string
+  onChainTrack?: (track: string) => void
   /** The project shown: a key, or '*' for every project. */
   project?: string
   /** This chat's own project. */
@@ -219,35 +224,54 @@ const NODE_FILL: Record<RoadmapStatus, [string, string]> = {
 const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /**
- * The chain graph drawn as boxes and arrows: columns left to right, a box per step in its status colours
- * (its own fill, so it reads on a light and a dark page), the next step outlined, the longest open chain
- * in bold arrows, a moved step's arrow dashed.
+ * One track's chains drawn top to bottom, to fit a tall, narrow pane: a row per step of the chain, the
+ * steps that can go side by side side by side, each box in its status colours (its own fill, so it reads
+ * on a light and a dark page), the next step outlined, the longest open chain in bold arrows, a moved
+ * step's arrow dashed, steps of other tracks dashed and faded.
  */
-export function chainSvg(g: ChainGraph): { svg: string; width: number; height: number } {
-  const [W, H, GX, GY, PAD] = [178, 42, 46, 14, 8]
-  const width = PAD * 2 + g.layers * W + Math.max(0, g.layers - 1) * GX
-  const height = PAD * 2 + g.rows * H + Math.max(0, g.rows - 1) * GY
-  const at = new Map(g.nodes.map(n => [n.ref, { x: PAD + n.layer * (W + GX), y: PAD + n.row * (H + GY) }]))
+export function chainSvg(g: ChainGraph, opts: { maxAcross?: number } = {}): { svg: string; width: number; height: number } {
+  // At most `maxAcross` boxes side by side (what the pane's width holds); a step of the chain with more
+  // goes on over further rows instead of making the picture too wide to read.
+  const across = Math.max(1, Math.min(g.rows, opts.maxAcross ?? 2))
+  const [W, H, GX, GY, PAD] = [across === 1 ? 320 : across === 2 ? 230 : 180, 42, 14, 26, 8]
+  const width = PAD * 2 + across * W + (across - 1) * GX
+  const perLayer = new Map<number, ChainNode[]>()
+  for (const n of g.nodes) perLayer.set(n.layer, [...(perLayer.get(n.layer) ?? []), n])
+  const at = new Map<string, { x: number; y: number }>()
+  let y = PAD
+  for (let l = 0; l < g.layers; l++) {
+    const row = (perLayer.get(l) ?? []).sort((a, b) => a.row - b.row)
+    for (let i = 0; i < row.length; i += across) {
+      const line = row.slice(i, i + across)
+      // Each line centred, so a single step sits in the middle of the ones around it.
+      const left = PAD + ((across - line.length) * (W + GX)) / 2
+      line.forEach((n, k) => at.set(n.ref, { x: left + k * (W + GX), y }))
+      y += H + GY
+    }
+  }
+  const height = Math.max(PAD * 2 + H, y - GY + PAD)
   const cut = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
+  const fits = Math.floor((W - 16) / 6.6)
   const arrows = g.edges.map(e => {
     const a = at.get(e.from)!
     const b = at.get(e.to)!
-    const [x1, y1, x2, y2] = [a.x + W, a.y + H / 2, b.x, b.y + H / 2]
-    const mid = (x1 + x2) / 2
+    const [x1, y1, x2, y2] = [a.x + W / 2, a.y + H, b.x + W / 2, b.y]
+    const mid = (y1 + y2) / 2
     return (
-      `<path d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 6},${y2}" fill="none" stroke="${e.critical ? '#d29922' : '#8b949e'}" ` +
+      `<path d="M${x1},${y1} C${x1},${mid} ${x2},${mid} ${x2},${y2 - 6}" fill="none" stroke="${e.critical ? '#d29922' : '#8b949e'}" ` +
       `stroke-width="${e.critical ? 2.5 : 1.3}"${e.moved ? ' stroke-dasharray="4 3"' : ''} marker-end="url(#arrow)"/>`
     )
   })
   const boxes = g.nodes.map(n => {
     const { x, y } = at.get(n.ref)!
     const [fill, stroke] = NODE_FILL[n.status]
-    const faded = n.status === 'skipped' || n.status === 'moved' ? ' opacity="0.75"' : ''
+    const faded = n.status === 'skipped' || n.status === 'moved' || n.foreign ? ' opacity="0.7"' : ''
+    const head = `${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
     return (
       `<g${faded}><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
-      `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"/>` +
-      `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(`${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`)}</text>` +
-      `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, 26))}</text></g>`
+      `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"${n.foreign ? ' stroke-dasharray="3 2"' : ''}/>` +
+      `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(cut(head, fits + 6))}</text>` +
+      `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, fits))}</text></g>`
     )
   })
   const svg =
@@ -258,16 +282,35 @@ export function chainSvg(g: ChainGraph): { svg: string; width: number; height: n
   return { svg, width, height }
 }
 
-function chainsView(els: Els, d: PaneData) {
-  const { Box, Text, Svg } = els
-  // From the whole board, so a chain into another project keeps its arrows; scoped to the project shown.
+/** The tracks with a chain in the project shown — the Chains tab offers them one at a time. */
+export function chainTracks(d: Pick<PaneData, 'board' | 'whole' | 'project'>): string[] {
   const g = chainGraph(d.whole ?? d.board, d.project)
+  const shown = new Set(d.board.tracks.map(t => t.name))
+  return [...new Set(g.nodes.map(n => n.track))].filter(t => shown.has(t)).sort()
+}
+
+function chainsView(els: Els, d: PaneData) {
+  const { Box, Text, Button, Svg } = els
+  const tracks = chainTracks(d)
+  // This chat's track first: the one it holds a step in, else the one it last worked in.
+  const track = [d.chainTrack, d.focus?.split('/')[0], d.chatTrack].find(t => t && tracks.includes(t)) ?? tracks[0]
+  const g = track ? chainGraph(d.whole ?? d.board, d.project, { track }) : chainGraph(d.board, d.project)
   const mermaid = mermaidOf(g)
+  const title = (name: string) => d.board.tracks.find(t => t.name === name)?.title ?? name
   return (
     <Box key="chains" flexDirection="column">
+      {tracks.length > 1 ? (
+        <Box key="chain-tracks" flexDirection="row" gap={1} flexWrap="wrap" marginBottom={1}>
+          {tracks.map((name, i) => (
+            <Button key={`chain-track-${i}`} plain variant={name === track ? 'primary' : undefined} onPress={() => d.onChainTrack?.(name)}>
+              {name === track ? `[${name}]` : ` ${name} `}
+            </Button>
+          ))}
+        </Box>
+      ) : null}
       <Box flexDirection="row" gap={1}>
-        <Text dimColor wrap="truncate-end">
-          What waits on what: ▸ next · ★ longest open chain · dashed: moved
+        <Text bold wrap="truncate-end">
+          {track ? title(track) : 'Chains'}
         </Text>
         <Box flexGrow={1} />
         {Btn(
@@ -278,14 +321,18 @@ function chainsView(els: Els, d: PaneData) {
           <Text><Text color="suggestion">⧉ Copy as Mermaid</Text></Text>,
         )}
       </Box>
+      <Text dimColor wrap="truncate-end">
+        {`▸ next · ★ longest open chain · dashed: moved or another track${g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
+      </Text>
       {g.nodes.length === 0 ? (
         <Text dimColor>No step waits on another yet. Plans give steps blocked_by; moves show here too.</Text>
       ) : d.canDraw && Svg ? (
         (() => {
-          const drawn = chainSvg(g)
-          // Scaled to the pane's width (about 8 px a column), so a wide graph leaves no empty band below it.
-          const fit = Math.min(1, (Math.max(20, d.cols) * 8) / drawn.width)
-          return <Svg key="chain-graph" source={drawn.svg} alt="the roadmap's chains of steps" height={Math.max(40, Math.round(drawn.height * fit))} />
+          // As many boxes side by side as the pane's width holds (about 8 px a column), never fewer than one.
+          const px = Math.max(20, d.cols) * 8
+          const drawn = chainSvg(g, { maxAcross: Math.max(1, Math.floor((px + 14) / 244)) })
+          const fit = Math.min(1, px / drawn.width)
+          return <Svg key="chain-graph" source={drawn.svg} alt={`the chains of ${track ?? 'the roadmap'}`} height={Math.max(40, Math.round(drawn.height * fit))} />
         })()
       ) : (
         chainText(g).map((line, i) => (
