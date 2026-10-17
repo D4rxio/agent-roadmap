@@ -278,6 +278,8 @@ export type RoadmapProject = {
   name: string
   /** Tracks that belong to it (archived ones not counted). */
   tracks: number
+  /** Its archived tracks. */
+  archived: number
 }
 
 export type RoadmapBoard = {
@@ -286,6 +288,8 @@ export type RoadmapBoard = {
   agents: RoadmapAgent[]
   /** Every project known from tracks and sessions, by name. */
   projects: RoadmapProject[]
+  /** On a board narrowed to one project: each track left out, by name → its project's name. */
+  elsewhere?: Record<string, string>
   at: number
 }
 

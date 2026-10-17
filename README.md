@@ -88,8 +88,9 @@ or let it read and update one as it works. The pane opens on its own in the desk
   **↺ Unarchive**.
 - **Projects.** Tracks belong to the repository they were laid out from (worktrees count as one). The
   pane shows this chat's project — plus tracks in no project — with a row to switch to another or **All**;
-  hover a track header for **⌂** to move it to another project. The band and the agents' summary stay on
-  the chat's own project and name the others in one line.
+  hover a track header for **⌂** to move it to another project. Chats working in other projects stay out
+  too. The band and the agents' summary stay on the chat's own project and name the others in one line; a
+  dependency on another project's step says which project it is in.
 - **This chat.** The step this chat holds, first thing in its pane; every pane marks which chat holds which step.
 - **Needs you.** Checkpoints, proposed skips and moves, and reviews to confirm, each waiting for
   **Confirm / Reject**; failed steps; and steps left running with nobody on them (**◌ stale**).

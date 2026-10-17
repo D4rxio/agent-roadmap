@@ -53,6 +53,8 @@ Any tool may read it, and append to it under the same rules, so other agents and
   step (a `done`, an agent's end) is ignored. A `moved` without `movedTo` is ignored. Writers check a move
   when it is proposed and again when the person confirms it (the target must still exist and must not lead
   back through confirmed moves); a proposal that no longer stands is shown with why, and cannot be confirmed.
+  The journal takes no locks, so two confirmations written at once can still close a loop; such a move
+  ends nowhere (its dependents stay blocked) and readers show it to the person, who undoes one.
 - Plan steps may carry `why`, `scope` and `doneWhen` (the step's brief); a plan whose `blockedBy`
   closes a loop must not be written.
 - **Review policy.** A plan may carry `review` for the whole track, a step its own:
@@ -93,7 +95,9 @@ Any tool may read it, and append to it under the same rules, so other agents and
   `project` (a key, or `null` for none — the person's word only); else the first `plan` that names one;
   else the project most of the track's `plan`/`step`/`add`/`review` events came from (by their session's
   project); else none. A track in no project shows in every project. Readers show a chat its own project
-  by default; `blocked_by` across projects is allowed.
+  by default — its tracks, and the sessions and agents working in it (a session that never said where it
+  works shows everywhere, like an unplaced track); `blocked_by` across projects is allowed and is shown
+  as such. A project key is never empty: `/` stays `/`.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.

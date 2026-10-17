@@ -57,8 +57,10 @@ async function detectProject($: EngineInterface, cwd: string): Promise<string> {
     .run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
     .catch(() => undefined)
   const dir = git?.exitCode === 0 ? git.stdout.trim() : ''
-  const root = dir ? dir.replace(/[\\/]\.git[\\/]?$/, '') : cwd
-  return root.replace(/[\\/]+$/, '') || cwd
+  const root = dir ? dir.replace(/[\\/]\.git[\\/]?$/, '') || dir : cwd
+  // Without trailing separators, but never emptied: `/` stays `/`, `C:\\` stays `C:\\`.
+  const key = root.replace(/[\\/]+$/, '')
+  return key && !/^[A-Za-z]:$/.test(key) ? key : root
 }
 
 /**

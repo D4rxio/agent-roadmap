@@ -1,5 +1,5 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import { ICONS, PRIORITIES, attention, externalNote, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Els = Record<string, any>
@@ -224,7 +224,7 @@ function sparkText(series: number[]): string {
 }
 
 function stepRight(s: RoadmapStep, d: PaneData): string {
-  if (s.status === 'blocked') return `waits on ${s.blockedBy.join(', ')}`
+  if (s.status === 'blocked') return `waits on ${s.blockedBy.map(r => `${r}${externalNote(d.board, r)}`).join(', ')}`
   if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
   if (s.status === 'running' && s.stale) return `stale · nobody on it since ${s.lastAt ? when(s.lastAt, d.now, d.tz) : 'long ago'}`
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
@@ -292,9 +292,11 @@ function header(els: Els, d: PaneData) {
     </Button>
   )
   // With more than one project, a row to pick which one the pane shows; this chat's own is the default.
-  const projects = d.board.projects.filter(p => p.tracks > 0 || p.key === d.here)
+  // Every project with tracks (archived ones count: Backlog shows them), and this chat's own. Shown when
+  // there is a choice, or when the pane is away from this chat's project, so there is always a way back.
+  const projects = d.board.projects.filter(p => p.tracks > 0 || p.archived > 0 || p.key === d.here)
   const picker =
-    d.onProjectView && projects.length > 1 ? (
+    d.onProjectView && (projects.length > 1 || (d.project !== undefined && d.project !== (d.here ?? '*'))) ? (
       <Box key="projects" flexDirection="row" gap={1} marginBottom={1}>
         {projects.map((p, i) => (
           <Button key={`proj-${i}`} plain variant={d.project === p.key ? 'primary' : undefined} onPress={() => d.onProjectView?.(p.key === d.here ? '' : p.key)}>
@@ -329,7 +331,7 @@ function header(els: Els, d: PaneData) {
 function needsYou(els: Els, d: PaneData) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
-  if (needs.awaiting.length + needs.failed.length + needs.stale.length === 0) return null
+  if (needs.awaiting.length + needs.failed.length + needs.stale.length + needs.brokenMoves.length === 0) return null
   const titleOf = (track: string) => d.board.tracks.find(t => t.name === track)?.title ?? track
   return (
     <Box key="attention" flexDirection="column" marginBottom={1}>
@@ -338,7 +340,23 @@ function needsYou(els: Els, d: PaneData) {
         {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length} to confirm`}</Text> : null}
         {needs.failed.length ? <Text color="error">{`✗ ${needs.failed.length} failed`}</Text> : null}
         {needs.stale.length ? <Text color="warning">{`◌ ${needs.stale.length} stale`}</Text> : null}
+        {needs.brokenMoves.length ? <Text color="warning">{`↪ ${needs.brokenMoves.length} move${needs.brokenMoves.length === 1 ? '' : 's'} going nowhere`}</Text> : null}
       </Box>
+      {needs.brokenMoves.map(st => (
+        <Box key={`broken-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
+          {Line(els, `broken-line-${st.track}-${st.id}`, [
+            { text: '↪ ', color: 'warning' },
+            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+          ])}
+          <Text dimColor wrap="truncate-end">{`   moved to ${st.movedTo ?? '?'}, but the moves end nowhere (a loop, or a step gone) — its dependents stay blocked`}</Text>
+          <Box flexDirection="row" gap={1}>
+            <Text>{'  '}</Text>
+            <Button key={`unmove-${st.track}-${st.id}`} onPress={() => d.onCycle(st.track, st.id, 'todo')}>
+              Undo move
+            </Button>
+          </Box>
+        </Box>
+      ))}
       {needs.stale.map(st => (
         <Box key={`stale-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
           {Line(els, `stale-line-${st.track}-${st.id}`, [

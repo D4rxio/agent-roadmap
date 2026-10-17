@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1872,6 +1872,119 @@ test('the pane shows this chat\'s project, switches to another or All, and place
   expect(await band.find({ text: /web 0%/ })).toBeDefined()
   expect(await band.find({ text: /api 0%/ })).toBe(undefined)
   await band.unmount()
+})
+
+test('projects, second round: who works where stays in its project; external links say so; names stay unique', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, project?: string, steps: object[] = [{ id: '1', title: `${track} work`, review: off }]) =>
+    ({ kind: 'plan', at, session: 's', track, project, phases: [{ name: 'P', steps }] }) as RoadmapEvent
+  const session = (at: number, id: string, project?: string) => ({ kind: 'session', at, session: id, title: `chat ${id}`, actor: 'claude', project }) as RoadmapEvent
+  const agent = (at: number, sessionId: string, agentId: string) => ({ kind: 'agent', at, session: sessionId, agentId, description: `agent of ${sessionId}`, type: 'Explore' }) as RoadmapEvent
+  const events = [
+    plan(1, 'web', '/repos/web', [{ id: '1', title: 'Front', blockedBy: ['api/1'], review: off }]),
+    plan(2, 'api', '/repos/api'),
+    session(3, 'w', '/repos/web'),
+    session(3, 'a', '/repos/api'),
+    agent(4, 'w', 'gw'),
+    agent(4, 'a', 'ga'),
+  ]
+  const lives = [
+    { session: 'w', title: 'chat w', at: 9990, agents: [], project: '/repos/web' },
+    { session: 'a', title: 'chat a', at: 9990, agents: [], project: '/repos/api' },
+  ]
+  const whole = fold(events, lives, 9999)
+  const web = forProject(whole, '/repos/web')
+  // Sessions and their agents are scoped like the tracks.
+  // (`s` laid out the plans without ever saying where it works: like an unplaced track, it shows everywhere.)
+  expect(web.sessions.map(s => s.id).sort()).toEqual(['s', 'w'])
+  expect(forProject(fold([...events, session(3, 'old')], lives, 9999), '/repos/web').sessions.map(s => s.id).sort()).toEqual(['old', 's', 'w'])
+  expect(web.agents.map(a => a.id)).toEqual(['gw'])
+  const ctx = { events, lives, now: 9999, session: 'me', actor: 'claude', project: '/repos/web' }
+  expect(statusAction(ctx).text).toContain('chat w')
+  expect(statusAction(ctx).text).not.toContain('chat a')
+  expect(statusAction(ctx, { all: true }).text).toContain('chat a')
+  // A dependency into another project says so: summary, brief.
+  expect(summary(whole, { project: '/repos/web' })).toContain('(blocked by api/1 (in project api))')
+  expect(brief(whole, 'web', '1')).toContain('api/1 [in project api]')
+  expect(brief(whole, 'api', '1')).not.toContain('[in project')
+  // A project with only archived tracks is still listed (the picker offers it).
+  const archivedOnly = fold([...events, { kind: 'triage', at: 5, session: 'p', track: 'api', archived: true, origin: 'person' } as RoadmapEvent], [], 9999)
+  expect(archivedOnly.projects.find(p => p.key === '/repos/api')?.archived).toBe(1)
+  // Names stay unique however deep the clash goes.
+  const deep = fold([plan(1, 'a', '/x/group/api'), plan(2, 'b', '/y/group/api'), plan(3, 'c', '/z/other/api')], [], 9)
+  expect(deep.projects.map(p => p.name)).toEqual(['api (other)', 'api (x/group)', 'api (y/group)'])
+  // Two moves confirmed at once into a loop end nowhere: the person is shown it, to undo one.
+  const loop = fold(
+    [
+      plan(1, 'm', '/repos/web', [{ id: '1', title: 'One', review: off }, { id: '2', title: 'Two', review: off }]),
+      { kind: 'step', at: 5, session: 'p', track: 'm', id: '1', status: 'moved', movedTo: 'm/2', reason: 'r', origin: 'person', actor: 'person' } as RoadmapEvent,
+      { kind: 'step', at: 5, session: 'q', track: 'm', id: '2', status: 'moved', movedTo: 'm/1', reason: 'r', origin: 'person', actor: 'person' } as RoadmapEvent,
+    ],
+    [],
+    9,
+  )
+  expect(attention(loop).brokenMoves.map(s => s.id).sort()).toEqual(['1', '2'])
+})
+
+test('the pane keeps a way to every project, shows only its own chats, and offers to undo a move going nowhere', async ($, on) => {
+  const off = { required: false }
+  const plan = (at: number, track: string, project?: string, steps: object[] = [{ id: '1', title: `${track} work`, review: off }]) =>
+    ({ kind: 'plan', at, session: 's', track, title: track.toUpperCase(), project, phases: [{ name: 'P', steps }] })
+  const events = [
+    plan(1000, 'web', '/repos/web', [{ id: '1', title: 'Front', blockedBy: ['api/1'], review: off }, { id: '2', title: 'One', review: off }, { id: '3', title: 'Two', review: off }]),
+    plan(1001, 'api', '/repos/api'),
+    { kind: 'triage', at: 1002, session: 'p', track: 'api', archived: true, origin: 'person' },
+    { kind: 'step', at: 1003, session: 'p', track: 'web', id: '2', status: 'moved', movedTo: 'web/3', reason: 'r', origin: 'person', actor: 'person' },
+    { kind: 'step', at: 1003, session: 'q', track: 'web', id: '3', status: 'moved', movedTo: 'web/2', reason: 'r', origin: 'person', actor: 'person' },
+    { kind: 'session', at: 1004, session: 'other', title: 'A chat in api', actor: 'claude', project: '/repos/api' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  files.set('/home/t/.claude/roadmap/live/other.json', JSON.stringify({ session: 'other', title: 'A chat in api', at: Date.now(), activity: 'Edit: secret.ts', project: '/repos/api', agents: [] }))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: Date.now(), isLink: false })),
+  }))
+  on('process.run', (_$, e) =>
+    e.argv[0] === 'git'
+      ? { value: { exitCode: 0, stdout: '/repos/web/.git\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } },
+  )
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-p2' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/repos/web', surface: null, isInteractive: true } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // A project whose only track is archived is still offered, and so is All.
+  expect(await ui.find({ text: / api / })).toBeDefined()
+  expect(await ui.find({ text: / All / })).toBeDefined()
+  // Another project's chat and what it is doing stay out of this project's pane.
+  expect(await ui.find({ text: /A chat in api/ })).toBe(undefined)
+  expect(await ui.find({ text: /secret\.ts/ })).toBe(undefined)
+  // The loop of two moves comes to the person, with a way out.
+  expect(await ui.find({ text: /going nowhere/ })).toBeDefined()
+  await ui.press({ key: 'unmove-web-2' })
+  expect([...files.values()].some(t => t.includes('"id":"2"') && t.includes('"status":"todo"') && t.includes('"origin":"person"'))).toBe(true)
+  // A dependency into another project says so.
+  await ui.press({ key: 'fold-web' })
+  expect(await ui.find({ text: /waits on api\/1 \(in project api\)/ })).toBeDefined()
+  // All shows the other chat.
+  await ui.press({ key: 'proj-all' })
+  expect(await ui.find({ text: /A chat in api/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

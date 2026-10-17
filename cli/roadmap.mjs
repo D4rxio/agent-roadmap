@@ -81,18 +81,24 @@ if (detected && flags.actor && String(flags.actor) !== actor) {
   process.stderr.write(`roadmap: --actor ${flags.actor} ignored: this runs inside ${actor === 'codex' ? 'Codex' : 'Claude Code'}, so the actor is ${actor}\n`)
 }
 /** The project this runs in: the main repository's folder (worktrees share it), else the working folder. */
+/** A folder as a project key: without trailing separators, but never emptied (`/` stays `/`, `C:\\` stays). */
+function keyOf(path) {
+  const t = path.replace(/[\\/]+$/, '')
+  return t && !/^[A-Za-z]:$/.test(t) ? t : path
+}
+
 function detectProject() {
   try {
     const dir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim()
-    if (dir) return dir.replace(/[\\/]\.git[\\/]?$/, '').replace(/[\\/]+$/, '')
+    if (dir) return keyOf(dir.replace(/[\\/]\.git[\\/]?$/, '') || dir)
   } catch {}
-  return process.cwd().replace(/[\\/]+$/, '')
+  return keyOf(process.cwd())
 }
 const projectKey = detectProject()
-const project = basename(projectKey)
+const project = basename(projectKey) || projectKey
 const day = new Date().toISOString().slice(0, 10)
 const session = String(
   flags.session ||
@@ -221,9 +227,12 @@ switch (command) {
   }
   case 'md': {
     const { b } = board()
-    const t = args[0] && b.tracks.find(x => x.name === args[0])
-    if (args[0] && !t) fail(`no track "${args[0]}"`)
     const shown = model.forProject(b, flags.all ? '*' : projectKey)
+    const t = args[0] && shown.tracks.find(x => x.name === args[0])
+    if (args[0] && !t) {
+      const other = b.tracks.find(x => x.name === args[0])
+      fail(other ? `track "${args[0]}" is in project ${shown.elsewhere?.[args[0]] ?? 'another'}; add --all to print it here` : `no track "${args[0]}"`)
+    }
     process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset) : model.boardMarkdown(shown, Date.now(), offset)) + '\n')
     break
   }

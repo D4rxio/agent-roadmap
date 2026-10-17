@@ -498,25 +498,52 @@ export function projectLabel(key: string): string {
 /** Every project named by a track or a session, each with a name unique among them. */
 function projectsOf(tracks: RoadmapTrack[], sessions: RoadmapSession[]): RoadmapProject[] {
   const keys = [...new Set([...tracks.map(t => t.project), ...sessions.map(s => s.project)].filter((k): k is string => !!k))]
-  const label = new Map(keys.map(k => [k, projectLabel(k)]))
-  const clash = (k: string) => keys.some(o => o !== k && label.get(o) === label.get(k))
+  const parts = new Map(keys.map(k => [k, k.split(/[\\/]/).filter(Boolean)]))
+  // Its folder's name; where two share it, as many parent folders as it takes to tell them apart.
+  const nameOf = (key: string) => {
+    const own = parts.get(key) ?? []
+    for (let n = 1; n <= own.length; n++) {
+      const tail = own.slice(-n).join('/')
+      if (!keys.some(o => o !== key && (parts.get(o) ?? []).slice(-n).join('/') === tail)) {
+        return n === 1 ? projectLabel(key) : `${projectLabel(key)} (${own.slice(-n, -1).join('/')})`
+      }
+    }
+    return key
+  }
   return keys
     .map(key => ({
       key,
-      // Two repositories with one folder name: say which parent each lives in.
-      name: clash(key) ? `${label.get(key)} (${projectLabel(key.slice(0, key.length - (label.get(key) ?? '').length))})` : (label.get(key) ?? key),
+      name: nameOf(key),
       tracks: tracks.filter(t => t.project === key && !t.archived).length,
+      archived: tracks.filter(t => t.project === key && t.archived).length,
     }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
 /**
- * The board one project sees: its own tracks and those nobody placed. `undefined` or `'*'` is every project.
- * Sessions and agents stay whole: who is working where is useful across projects.
+ * The board one project sees: its own tracks and those nobody placed, and the sessions (and their agents)
+ * working in it or not saying where. `undefined` or `'*'` is every project. Tracks left out are named in `elsewhere`,
+ * so a dependency on one can say it lives in another project.
  */
 export function forProject(board: RoadmapBoard, project: string | undefined): RoadmapBoard {
   if (!project || project === '*') return board
-  return { ...board, tracks: board.tracks.filter(t => !t.project || t.project === project) }
+  const name = (key: string) => board.projects.find(p => p.key === key)?.name ?? projectLabel(key)
+  // Like tracks: a chat in another project stays out; one that never said where it works shows everywhere.
+  const sessions = board.sessions.filter(s => !s.project || s.project === project)
+  const ids = new Set(sessions.map(s => s.id))
+  return {
+    ...board,
+    tracks: board.tracks.filter(t => !t.project || t.project === project),
+    sessions,
+    agents: board.agents.filter(a => ids.has(a.session)),
+    elsewhere: Object.fromEntries(board.tracks.filter(t => t.project && t.project !== project).map(t => [t.name, name(t.project!)])),
+  }
+}
+
+/** " (in project api)" for a reference into a track this board left out, else "". */
+export function externalNote(board: RoadmapBoard, ref: string): string {
+  const name = board.elsewhere?.[ref.split('/')[0] ?? '']
+  return name ? ` (in project ${name})` : ''
 }
 
 export const ICONS: Record<RoadmapStatus, string> = {
@@ -536,9 +563,13 @@ export function attention(board: RoadmapBoard): {
   blocked: RoadmapStep[]
   failed: RoadmapStep[]
   stale: RoadmapStep[]
+  brokenMoves: RoadmapStep[]
 } {
   const all = board.tracks.filter(t => !t.backlog && !t.archived).flatMap(t => t.steps)
   return {
+    // A move whose chain ends nowhere (two moves confirmed at once into a loop, or a target gone): its
+    // dependents stay blocked until the person undoes one.
+    brokenMoves: all.filter(s => s.status === 'moved' && !s.movedFinal),
     awaiting: all.filter(s => s.status === 'awaiting'),
     blocked: all.filter(s => s.status === 'blocked' && !s.backlog),
     failed: all.filter(s => s.status === 'failed' && !s.backlog),
@@ -788,9 +819,11 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
   if (!t || !s) return undefined
   const ref = (r: string) => {
     const [tn, sid] = [r.slice(0, r.indexOf('/')), r.slice(r.indexOf('/') + 1)]
-    const dep = board.tracks.find(x => x.name === tn)?.steps.find(x => x.id === sid)
+    const owner = board.tracks.find(x => x.name === tn)
+    const dep = owner?.steps.find(x => x.id === sid)
+    const other = owner?.project && owner.project !== t.project ? ` [in project ${board.projects.find(p => p.key === owner.project)?.name ?? projectLabel(owner.project)}]` : ''
     return dep
-      ? `${ICONS[dep.status]} ${r} ${dep.title} (${dep.status}${dep.status === 'skipped' ? `: ${dep.skipReason ?? 'no reason'}` : ''}${dep.status === 'moved' ? ` to ${dep.movedFinal ?? `${dep.movedTo ?? '?'}, chain broken`} — this waits on that step now` : ''})`
+      ? `${ICONS[dep.status]} ${r}${other} ${dep.title} (${dep.status}${dep.status === 'skipped' ? `: ${dep.skipReason ?? 'no reason'}` : ''}${dep.status === 'moved' ? ` to ${dep.movedFinal ?? `${dep.movedTo ?? '?'}, chain broken`} — this waits on that step now` : ''})`
       : `? ${r} (unknown)`
   }
   const dependents = board.tracks.flatMap(x =>
@@ -864,7 +897,7 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
     for (const s of open.slice(0, opts.open ?? 6)) {
       const why =
         s.status === 'blocked'
-          ? ` (blocked by ${s.blockedBy.join(', ')})`
+          ? ` (blocked by ${s.blockedBy.map(r => `${r}${externalNote(board, r)}`).join(', ')})`
           : s.status === 'awaiting'
             ? s.proposed === 'skipped'
               ? ` (a skip awaits the person: ${s.skipReason ?? 'no reason'})`
