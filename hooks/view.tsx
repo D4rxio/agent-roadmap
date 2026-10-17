@@ -101,12 +101,11 @@ function thisChat(els: Els, d: PaneData) {
   const [track, id] = [d.focus.split('/')[0] ?? '', d.focus.split('/').slice(1).join('/')]
   const t = d.board.tracks.find(x => x.name === track)
   const s = t?.steps.find(x => x.id === id)
+  // One line, never wrapped: the label is part of it, and only the title is cut.
   return (
     <Box key="this-chat" flexDirection="row" gap={1} marginBottom={1}>
-      <Text color="warning" bold>
-        This chat
-      </Text>
       {Line(els, 'this-chat-line', [
+        { text: 'This chat  ', color: 'warning', bold: true },
         ...(s ? [{ text: `${ICONS[s.status]} `, color: COLOR[s.status] }] : []),
         { text: s ? `${d.focus}  ${s.title}` : t ? t.title : d.focus, main: true },
       ])}
@@ -320,8 +319,9 @@ function header(els: Els, d: PaneData) {
         `Backlog ${d.board.tracks.filter(t => t.backlog || t.archived).length + d.board.tracks.filter(t => !t.archived).flatMap(t => t.steps).filter(x => x.backlog).length}`,
       )}
       <Box flexGrow={1} />
+      {/* Short, so the tabs never get cut: the whole roadmap (the project shown) as Markdown. */}
       <Button key="copy-all" plain onPress={(press: any) => d.onCopyAll(press?.surface ?? 'desktop')}>
-        ⧉ Copy all as Markdown
+        ⧉ Copy
       </Button>
     </Box>
     </Box>
@@ -803,14 +803,26 @@ function backlogView(els: Els, d: PaneData) {
   )
 }
 
-const OUTDATED = '↻ The roadmap plugin was updated — restart this chat to load it.'
+/** What the notice says, and the command a chat runs to load the new code in place. */
+export const RELOAD = '/reload-plugins'
 
 export function drawPane(els: Els, d: PaneData) {
   const { Box, Text } = els
+  // A plugin cannot run a slash command itself: the notice names it and copies it for the person.
   const stale = d.outdated ? (
-    <Text color="warning" wrap="truncate-end">
-      {OUTDATED}
-    </Text>
+    <Box key="outdated" flexDirection="row" gap={1} marginBottom={1}>
+      {Line(els, 'outdated-line', [
+        { text: '↻ ', color: 'warning' },
+        { text: `Roadmap updated — run ${RELOAD} (or restart this chat)`, color: 'warning', main: true },
+      ])}
+      {Btn(
+        els,
+        d,
+        { key: 'copy-reload', plain: true, onPress: (press: any) => d.onCopyText(RELOAD, press?.surface ?? 'desktop') },
+        'Copy command',
+        <Text><Text color="suggestion">Copy command</Text></Text>,
+      )}
+    </Box>
   ) : null
   if (d.board.tracks.length === 0 && d.board.sessions.length === 0) {
     return (
@@ -875,7 +887,7 @@ export function drawBand(
         )}
       </Box>
       {needs.awaiting.length ? <Text color="permission">{`◆ ${needs.awaiting.length}`}</Text> : null}
-      {d.outdated ? <Text color="warning">↻ restart chat</Text> : null}
+      {d.outdated ? <Text color="warning">{`↻ ${RELOAD}`}</Text> : null}
     </Box>
   )
 }

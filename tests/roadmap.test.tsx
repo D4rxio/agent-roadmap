@@ -1700,6 +1700,11 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
   on('store.get', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
+  const copied: string[] = []
+  on('ui.copy', (_$, e) => {
+    copied.push((e as { text: string }).text)
+    return { value: { isCopied: true } }
+  })
   on('command.register', () => ({ value: { command: 'roadmap' } }))
   on('tool.register', () => ({ value: { tool: 'x' } }))
   // The clock ticks only when the test says so.
@@ -1724,19 +1729,19 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
 
   await tick()
   let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  expect(await ui.find({ text: /Roadmap updated/ })).toBe(undefined)
   await ui.unmount()
   // Touched, not changed: same text, a new time.
   hooks[0]!.mtimeMs = 2
   await tick()
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  expect(await ui.find({ text: /Roadmap updated/ })).toBe(undefined)
   await ui.unmount()
   // A file that is not code changes: still nothing.
   hooks[2]!.text = 'still not code, but longer'
   await tick()
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  expect(await ui.find({ text: /Roadmap updated/ })).toBe(undefined)
   await ui.unmount()
   // The code changes: the pane and the band say so.
   hooks[1]!.text = 'export const b = 3'
@@ -1744,18 +1749,20 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
   await tick()
   for (const surface of ['terminal', 'desktop'] as const) {
     const each = await $.ui.mount({ ...PANE, surface })
-    expect(await each.find({ text: /The roadmap plugin was updated — restart this chat/ })).toBeDefined()
+    expect(await each.find({ text: /Roadmap updated — run \/reload-plugins/ })).toBeDefined()
+    await each.press({ key: 'copy-reload' })
+    expect(copied.pop()).toBe('/reload-plugins')
     await each.unmount()
   }
   const b = await band()
-  expect(await b.find({ text: /restart chat/ })).toBeDefined()
+  expect(await b.find({ text: /↻ \/reload-plugins/ })).toBeDefined()
   await b.unmount()
   // Put back as it was loaded: nothing to restart for.
   hooks[1]!.text = 'export const b = 2'
   hooks[1]!.mtimeMs = 4
   await tick()
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
+  expect(await ui.find({ text: /Roadmap updated/ })).toBe(undefined)
   await ui.unmount()
 })
 
