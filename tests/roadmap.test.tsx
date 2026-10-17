@@ -1787,6 +1787,8 @@ test('projects: a track belongs to the repo it was laid out from; the person can
   expect(track(legacy, 'docs')?.projectBy).toBe('inferred')
   // … and one nobody can place stays in no project.
   expect(track([plan(1, 'docs')], 'docs')?.project).toBe(undefined)
+  // Re-laying an old track from some other folder does not place it there: its chats' project wins.
+  expect(track([...legacy, plan(9, 'docs', '/tmp/scratch')], 'docs')?.project).toBe('/repos/web')
   // The person's word places it, or takes it out of any; an agent's word does not.
   expect(track([...base, triage(5, 'web', '/repos/api')], 'web')?.project).toBe('/repos/api')
   expect(track([...base, triage(5, 'web', '/repos/api')], 'web')?.projectBy).toBe('you')

@@ -92,7 +92,8 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - **Projects.** `session`, `plan` and live files may carry `project`: the folder of the main repository the
   writer works in (found through git's common dir, so every worktree of one repository is one project;
   outside git, the working folder). A track's project is, in order: the person's track-level `triage` with
-  `project` (a key, or `null` for none — the person's word only); else the first `plan` that names one;
+  `project` (a key, or `null` for none — the person's word only); else the project of the `plan` that
+  created the track (a later plan never sets it);
   else the project most of the track's `plan`/`step`/`add`/`review` events came from (by their session's
   project); else none. A track in no project shows in every project. Readers show a chat its own project
   by default — its tracks, and the sessions and agents working in it (a session that never said where it

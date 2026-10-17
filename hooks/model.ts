@@ -185,10 +185,10 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         backlog: false,
         archived: false,
         review: trackReview,
-        // The first plan that says where it was laid out sets the track's project; later plans, from
-        // wherever, do not move it.
-        project: old?.project ?? e.project,
-        projectBy: old?.project ? old.projectBy : e.project ? 'plan' : undefined,
+        // The plan that creates a track sets its project. A later plan, from wherever, never does — not
+        // even for a track laid out before projects existed: that one takes its chats' project instead.
+        project: old ? old.project : e.project,
+        projectBy: old ? old.projectBy : e.project ? 'plan' : undefined,
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
