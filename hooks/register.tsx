@@ -385,7 +385,7 @@ async function act($: EngineInterface, run: (ctx: ActionContext) => ActionResult
     actor: 'claude',
     track: journal.track,
     focus: journal.focus,
-    hints: { codexInstalled: journal.codexInstalled, cli: '~/.claude/mods/roadmap/cli/roadmap.mjs' },
+    hints: { codexInstalled: journal.codexInstalled, cli: 'node ~/.claude/mods/roadmap/cli/roadmap.mjs' },
   })
   if (!r.ok) return { result: r.text }
   for (const ev of r.emit) await emit($, ev)
