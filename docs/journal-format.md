@@ -52,7 +52,11 @@ Any tool may read it, and append to it under the same rules, so other agents and
   step. Steps new to a track must have a policy (their own or the track's); `{ "required": false }` opts
   out on purpose. A plan never lowers the policy a step has been under — its own or its track's, even
   after the step left a plan and came back: each part (required, independence, mode) is held at the
-  strictest it ever was. A plan can raise it. A re-laid plan that omits `review` keeps what is in force.
+  strictest it ever was, however the step comes back (a plan, an `add`, an edit). A plan can raise it. A
+  re-laid plan that omits `review` keeps what is in force.
+- A policy is read failing closed: an object that does not say `"required": false` requires a review, a
+  missing or unknown `independence` is `cross-model`, a missing or unknown `mode` is `standard`. Writers
+  store that normal form (`{ "required": true, "independence": …, "mode": … }` or `{ "required": false }`).
 - A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` meets the
   policy with `pass` or `findings`. A review reviews the work last reported done: it counts only if written
   strictly after the worker's latest `done`, while no `running` has reopened the work (a `running` in the

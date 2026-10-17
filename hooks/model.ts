@@ -130,7 +130,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       const old = tracks.get(e.track)
       const phases = e.phases.map(p => ({ name: p.name, stepIds: p.steps.map(s => s.id) }))
       const laid = new Map(e.phases.flatMap(p => p.steps.map(s => [s.id, { ...s, phase: p.name }] as const)))
-      const trackReview = stricter(e.review, old?.review)
+      const trackReview = stricter(policyOf(e.review), old?.review)
       // A plan (an agent's) can raise a step's review policy, never lower it: what this plan puts in
       // force (the step's own, else the track's) is held to the strictest the step was ever under.
       const reviewOf = (id: string, own: RoadmapReviewPolicy | undefined) => {
@@ -152,7 +152,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         scope: t.scope,
         doneWhen: t.doneWhen,
         // A re-laid step that omits `review` keeps its own; the floor above keeps the rest.
-        review: reviewOf(id, t.review ?? old?.steps.find(x => x.id === id)?.review),
+        review: reviewOf(id, policyOf(t.review) ?? old?.steps.find(x => x.id === id)?.review),
         reviews: [],
         agents: [],
         backlog: false,
@@ -262,7 +262,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       step.proposed = status === 'awaiting' ? proposed : undefined
       step.skipReason = skipReason
       // Review: the policy in force, who implemented, which reviews count, and whether done may stand.
-      step.review = step.review ?? t.review
+      // The floor applies however the step came to be — laid by a plan, brought back by an `add` or an
+      // edit — so no route around a plan sheds the policy a step was under.
+      step.review = stricter(step.review ?? t.review, floors.get(key(t.name, step.id)))
       const work = said.filter(w => w.origin !== 'person' && (w.status === 'running' || w.status === 'done'))
       const last = work[work.length - 1]
       step.implementer = last?.actor || last?.session ? { actor: last.actor ?? 'unknown', session: last.session ?? '' } : undefined
@@ -519,6 +521,21 @@ export function family(actor: string | undefined): string {
 const INDEPENDENCE = ['any', 'other-session', 'cross-model'] as const
 
 /**
+ * A review policy as written in the journal, read one way everywhere and failing closed: a policy that
+ * does not say `required: false` requires a review; a missing or unknown independence is cross-model
+ * (the strictest, as the plan tool's default); a missing or unknown mode is standard.
+ */
+export function policyOf(raw: unknown): RoadmapReviewPolicy | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as { required?: unknown; independence?: unknown; mode?: unknown }
+  if (r.required === false || r.required === 'false') return { required: false }
+  const independence = (INDEPENDENCE as readonly unknown[]).includes(r.independence)
+    ? (r.independence as RoadmapReviewPolicy['independence'])
+    : 'cross-model'
+  return { required: true, independence, mode: r.mode === 'adversarial' ? 'adversarial' : 'standard' }
+}
+
+/**
  * The stricter of two policies, part by part: required if either requires, the stronger
  * independence and the stronger mode of the two. A later plan can raise a policy, never lower any part.
  */
@@ -696,7 +713,7 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
                   ? ' (review failed: fix the findings, then ask for a new review)'
                   : ' (waits for its review)'
                 : s.reviewState === 'reviewed'
-                  ? ` (reviewed by ${s.passedReview?.actor ?? 'another model'}: the person confirms)`
+                  ? ` (reviewed by ${s.passedReview?.actor ?? 'another model'}: ${s.passedReview?.verdict ?? 'pass'} — the person confirms)`
                   : ' (awaiting the person)'
             : s.stale
               ? ' (stale: running, but nobody has been on it for hours — take it over or ask)'

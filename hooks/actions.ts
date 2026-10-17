@@ -6,6 +6,7 @@
 
 import type { RoadmapEvent, RoadmapLive, RoadmapPriority, RoadmapReviewPolicy, RoadmapStatus } from '../types'
 import {
+  policyOf,
   FOLLOW_UPS,
   PRIORITIES,
   STATUSES,
@@ -84,7 +85,8 @@ export function readPolicy(raw: unknown): { policy?: RoadmapReviewPolicy; error?
   }
   const mode = r.mode === undefined ? undefined : r.mode
   if (mode !== undefined && mode !== 'standard' && mode !== 'adversarial') return { error: 'review.mode is standard or adversarial' }
-  return { policy: { required, independence: independence as RoadmapReviewPolicy['independence'], mode: mode as RoadmapReviewPolicy['mode'] } }
+  // Written in the one normal form the fold reads (policyOf), so the journal never holds a half-said policy.
+  return { policy: policyOf({ required, independence, mode }) }
 }
 
 /** What an agent is told about a step that waits: for a review its policy requires, or for the person. */

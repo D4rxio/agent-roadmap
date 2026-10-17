@@ -1287,7 +1287,7 @@ test('review policy: a worker\'s done waits for a review that meets it; cross-mo
   expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.reviewPending).toBe(false)
   expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.passedReview?.actor).toBe('codex')
   expect(get([...impl, review(4, 'codex', 'x1', 'pass'), work(5, '1', 'done', 'person', 'p', 'person')])?.status).toBe('done')
-  expect(summary(fold([...impl, review(4, 'codex', 'x1', 'pass')], [], 9999))).toContain('reviewed by codex: the person confirms')
+  expect(summary(fold([...impl, review(4, 'codex', 'x1', 'pass')], [], 9999))).toContain('reviewed by codex: pass — the person confirms')
   // A failed review keeps it out, and says so.
   expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.reviewState).toBe('failed')
   expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.status).toBe('awaiting')
@@ -1467,6 +1467,43 @@ test('review policy, second round: no plan sheds a policy, each done needs its r
   const merged = get([...w1, ...w2.emit])?.review
   expect(merged?.independence).toBe('other-session')
   expect(merged?.mode).toBe('adversarial')
+})
+
+test('review policy, round four: an add cannot shed the floor, a half-said policy reads one way, the summary names the verdict', async () => {
+  const cross = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const work = (at: number, status: string, origin = 'agent', actor = 'claude') =>
+    ({ kind: 'step', at, session: 'c1', track: 'api', id: '1', status, actor, origin }) as RoadmapEvent
+  const review = (at: number, verdict: string) =>
+    ({ kind: 'review', at, session: 'x1', track: 'api', id: '1', actor: 'codex', verdict, via: 'codex-sandbox' }) as RoadmapEvent
+  const plan = (at: number, steps: object[], extra: object = {}) => ({ kind: 'plan', at, session: 's', track: 'api', phases: [{ name: 'P', steps }], ...extra }) as RoadmapEvent
+  const get = (events: RoadmapEvent[]) => fold(events, [], 99999).tracks[0]?.steps.find(x => x.id === '1')
+
+  // 1. Laid with a cross-model policy, reported done, dropped from the plan, brought back by an `add`:
+  // it still needs its review, and a pass still waits for the person.
+  const base = [plan(1, [{ id: '1', title: 'A', review: cross }]), work(2, 'running'), work(3, 'done'), plan(4, [{ id: '2', title: 'B', review: { required: false } }])]
+  const add = { kind: 'add', at: 5, session: 'c1', track: 'api', id: '1', title: 'A', origin: 'agent' } as RoadmapEvent
+  expect(get([...base, add])?.status).toBe('awaiting')
+  expect(get([...base, add])?.review?.independence).toBe('cross-model')
+  expect(get([...base, add, review(6, 'pass')])?.status).toBe('awaiting')
+  expect(get([...base, add, review(6, 'pass'), work(7, 'done', 'person', 'person')])?.status).toBe('done')
+
+  // 2. A half-said policy in the journal reads as the plan tool would write it: cross-model, and
+  // failing closed — anything but an explicit `required: false` requires a review.
+  for (const review_ of [{ required: true }, { required: true, independence: 'whoever' }, {}, { required: 'yes' }]) {
+    const events = [plan(1, [{ id: '1', title: 'A', review: review_ }]), work(2, 'running'), work(3, 'done'), review(4, 'pass')]
+    expect(get(events)?.review?.independence).toBe('cross-model')
+    expect(get(events)?.status).toBe('awaiting')
+  }
+  expect(get([plan(1, [{ id: '1', title: 'A', review: { required: false } }]), work(2, 'done')])?.status).toBe('done')
+  // … and the plan tool writes that normal form, so nothing half-said reaches the journal.
+  const laid = planAction({ events: [], lives: [], now: 1, session: 's', actor: 'claude' }, { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: { required: true } }] }] })
+  expect(JSON.stringify((laid.emit[0] as { phases: { steps: { review: unknown }[] }[] }).phases[0]!.steps[0]!.review)).toBe(
+    JSON.stringify({ required: true, independence: 'cross-model', mode: 'standard' }),
+  )
+
+  // 3. The summary names the verdict, not only the reviewer.
+  const reviewed = [plan(1, [{ id: '1', title: 'A', review: cross }]), work(2, 'running'), work(3, 'done'), review(4, 'findings')]
+  expect(summary(fold(reviewed, [], 99999))).toContain('reviewed by codex: findings — the person confirms')
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
