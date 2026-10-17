@@ -9,7 +9,9 @@ Any tool may read it, and append to it under the same rules, so other agents and
   Never edit or delete an event file. Nobody rewrites a shared "current state" file, so parallel
   sessions cannot lose each other's updates.
 - The board (tracks, steps, sessions, agents) is computed from all events sorted by `at`. The order in
-  which files arrive does not matter, and a duplicate changes nothing.
+  which files arrive does not matter, and a duplicate changes nothing. Events of the same millisecond are
+  ordered by kind (`session`, `plan`, `add`, `edit`, `agent`, `agent-end`, `step`, `triage`, `review`),
+  then by their JSON text — every reader folds them the same way.
 - **A worker reports, the person closes.** A worker's `done` on a `checkpoint` step, or on a step that last
   `failed`, becomes `awaiting` until an event with `"origin": "person"` confirms it.
 - `live/<session>.json` is a worker's heartbeat, rewritten by that worker only. A file older than 20 s
@@ -43,13 +45,21 @@ Any tool may read it, and append to it under the same rules, so other agents and
   closes a loop must not be written.
 - **Review policy.** A plan may carry `review` for the whole track, a step its own:
   `{ "required": true, "independence": "any" | "other-session" | "cross-model", "mode": "standard" | "adversarial" }`.
-  `cross-model` means the reviewer is a different model family (the `actor` up to its first `-`) from the
-  implementer — the actor of the last worker `running`/`done` on the step. Steps new to a track must have a
-  policy (their own or the track's); `{ "required": false }` opts out on purpose.
+  `required` must be stated (`true` or `false`); `{}` is not a policy. `cross-model` means the reviewer is a
+  different model family (the leading letters of `actor`, lower-cased: `claude-opus`, `claude_code` and
+  `Claude` are all `claude`) from the implementer — the actor of the last worker `running`/`done` on the
+  step. Steps new to a track must have a policy (their own or the track's); `{ "required": false }` opts
+  out on purpose. A re-laid plan that omits `review` keeps the policy in force, and a plan never lowers
+  one (a weaker policy than the current one is ignored); it can raise it.
 - A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` recorded
-  since the step last went `running` meets the policy with `pass` or `findings`; a qualifying `fail` keeps
-  it out. The person's own `done` is final. A review is written by the reviewer itself, under its own
-  `session` and `actor`.
+  strictly after the step last went `running` (with no `running`, after the worker's first `done`) meets
+  the policy with `pass` or `findings`; a qualifying `fail` keeps it out, and of qualifying reviews in the
+  same millisecond a `fail` wins. A review written before the work it would review never counts. The
+  person's own `done` is final. A review is written by the reviewer itself, under its own `session` and
+  `actor`, with `via` saying how that actor was established: `claude-code` (the mod's tool),
+  `codex-sandbox` / `claude-code-env` (the CLI read it from the environment) or `declared` (`--actor`,
+  unverified). Independence is only as good as that: the journal is a local, single-user file, not a proof
+  against someone who writes events by hand.
 - `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.

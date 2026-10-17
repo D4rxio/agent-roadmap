@@ -58,6 +58,12 @@ export type RoadmapEvent =
       verdict: 'pass' | 'findings' | 'fail'
       evidence?: string
       note?: string
+      /**
+       * How `actor` was established: `claude-code` (the mod's own tool), `codex-sandbox` (the CLI saw
+       * Codex's sandbox), `claude-code-env` (the CLI ran inside Claude Code) or `declared` (`--actor` /
+       * $ROADMAP_ACTOR, unverified). Cross-model independence is as good as this, no better.
+       */
+      via?: string
     }
   | {
       kind: 'step'
@@ -202,7 +208,7 @@ export type RoadmapTrack = {
   review?: RoadmapReviewPolicy
 }
 
-export type RoadmapReview = { actor: string; session: string; verdict: 'pass' | 'findings' | 'fail'; at: number; evidence?: string; note?: string }
+export type RoadmapReview = { actor: string; session: string; verdict: 'pass' | 'findings' | 'fail'; at: number; evidence?: string; note?: string; via?: string }
 
 export type RoadmapSession = {
   id: string

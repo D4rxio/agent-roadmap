@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { doneAction, markAction, planAction, reviewAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1314,7 +1314,7 @@ test('new steps must carry a review policy; existing ones may go without; Codex 
   })
   expect(first.ok).toBe(true)
   // Re-laid without a policy: the existing step is fine, and the track keeps its default for a new one.
-  const again = planAction(ctx(first.emit), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }, { id: '2', title: 'B' }] }] })
+  const again = planAction(ctx(first.emit, { now: 5001 }), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }, { id: '2', title: 'B' }] }] })
   expect(again.ok).toBe(true)
   const board = fold([...first.emit, ...again.emit], [], 5000)
   expect(board.tracks[0]?.steps.find(x => x.id === '2')?.review?.independence).toBe('cross-model')
@@ -1334,6 +1334,68 @@ test('new steps must carry a review policy; existing ones may go without; Codex 
   const codex = reviewAction(ctx(events, { actor: 'codex', session: 'x1' }), { step: 'api/1', verdict: 'pass', evidence: 'no findings' })
   expect(codex.text).not.toContain('does not satisfy')
   expect(reviewAction(ctx(events), { step: 'api/1', verdict: 'maybe' }).ok).toBe(false)
+})
+
+test('review policy holds up: a re-lay keeps it, an earlier review does not count, ties are read one way', async () => {
+  const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 5000, session: 's1', actor: 'claude', ...extra })
+  const strict = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const work = (at: number, status: string, actor: string, session: string) =>
+    ({ kind: 'step', at, session, track: 'api', id: '1', status, actor, origin: 'agent' }) as RoadmapEvent
+  const review = (at: number, actor: string, verdict: string, session = 'x1') =>
+    ({ kind: 'review', at, session, track: 'api', id: '1', actor, verdict }) as RoadmapEvent
+  const get = (events: RoadmapEvent[]) => fold(events, [], 9999).tracks[0]?.steps.find(x => x.id === '1')
+
+  // 1. Re-laid without `review`, a step keeps its own policy; a plan cannot lower it, and says so.
+  const first = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: strict }] }] })
+  expect(first.ok).toBe(true)
+  const relaid = planAction(ctx(first.emit, { now: 5001 }), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] })
+  expect(fold([...first.emit, ...relaid.emit], [], 5000).tracks[0]?.steps[0]?.review?.independence).toBe('cross-model')
+  const lowered = planAction(ctx(first.emit, { now: 5001 }), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: { required: false } }] }] })
+  expect(lowered.text).toContain('Kept the stricter review policy')
+  expect(fold([...first.emit, ...lowered.emit], [], 5000).tracks[0]?.steps[0]?.review?.required).toBe(true)
+  // … the track's default likewise; raising a policy works.
+  const t1 = planAction(ctx([]), { track: 'api', review: strict, phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] })
+  const t2 = planAction(ctx(t1.emit, { now: 5001 }), { track: 'api', review: { required: true, independence: 'any' }, phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] })
+  expect(t2.text).toContain('the track')
+  expect(fold([...t1.emit, ...t2.emit], [], 5000).tracks[0]?.review?.independence).toBe('cross-model')
+  const weak = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: { required: true, independence: 'any' } }] }] })
+  const raised = planAction(ctx(weak.emit, { now: 5001 }), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: strict }] }] })
+  expect(raised.text).not.toContain('Kept the stricter')
+  expect(fold([...weak.emit, ...raised.emit], [], 5000).tracks[0]?.steps[0]?.review?.independence).toBe('cross-model')
+
+  // 2. A review written before the work does not count for it; the CLI and tool refuse one with no work yet.
+  const plan = first.emit[0]!
+  expect(reviewAction(ctx([plan], { actor: 'codex', session: 'x1' }), { step: 'api/1', verdict: 'pass' }).ok).toBe(false)
+  expect(get([plan, review(2, 'codex', 'pass'), work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1')])?.status).toBe('awaiting')
+  expect(get([plan, review(2, 'codex', 'pass'), work(4, 'done', 'claude', 'c1')])?.status).toBe('awaiting')
+  expect(get([plan, work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1'), review(5, 'codex', 'pass')])?.status).toBe('done')
+
+  // 3. `review: {}` is not a policy: `required` must be said.
+  const empty = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: {} }] }] })
+  expect(empty.ok).toBe(false)
+  expect(empty.text).toContain('review.required must be true or false')
+  expect(planAction(ctx([]), { track: 'api', review: {}, phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] }).ok).toBe(false)
+
+  // 5. Same millisecond: a review at the moment the work starts does not count, and the board does not
+  // depend on the order events were read in (a pass and a fail at once read as failed).
+  expect(get([plan, work(3, 'running', 'claude', 'c1'), review(3, 'codex', 'pass'), work(4, 'done', 'claude', 'c1')])?.status).toBe('awaiting')
+  const tie = [plan, work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1'), review(5, 'codex', 'pass', 'x1'), review(5, 'gemini', 'fail', 'g1')]
+  for (const events of [tie, [...tie].reverse(), [tie[0]!, tie[4]!, tie[2]!, tie[3]!, tie[1]!]]) {
+    expect(get(events)?.reviewState).toBe('failed')
+    expect(get(events)?.status).toBe('awaiting')
+  }
+  const sameMs = [plan, work(3, 'running', 'claude', 'c1'), work(3, 'done', 'claude', 'c1')]
+  expect(get(sameMs)?.status).toBe(get([...sameMs].reverse())?.status)
+  // An agent that starts and ends in one millisecond ends, whichever file is read first.
+  const start = { kind: 'agent', at: 7, session: 's2', agentId: 'a1', description: 'x', type: 'Explore' } as RoadmapEvent
+  const end = { kind: 'agent-end', at: 7, session: 's2', agentId: 'a1', status: 'done' } as RoadmapEvent
+  expect(fold([end, start], [], 9999).agents[0]?.status).toBe('done')
+
+  // 6. A model family is its leading word, however the actor is spelled.
+  for (const name of ['claude', 'Claude', 'claude-opus', 'claude_code', 'claude.opus', 'claude:sonnet', 'CLAUDE CODE']) expect(family(name)).toBe('claude')
+  expect(family('codex')).toBe('codex')
+  expect(family(undefined)).toBe('unknown')
+  expect(get([plan, work(3, 'running', 'claude', 'c1'), work(4, 'done', 'claude', 'c1'), review(5, 'claude_code', 'pass')])?.status).toBe('awaiting')
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

@@ -73,8 +73,16 @@ export function refInText(
  * the latest plan of a track lays it out, the latest word on a step wins
  * (an explicit mark or an agent's start/end), duplicates change nothing.
  */
+const KIND_ORDER: string[] = ['session', 'plan', 'add', 'edit', 'agent', 'agent-end', 'step', 'triage', 'review']
+
 export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number): RoadmapBoard {
-  const sorted = [...events].sort((a, b) => a.at - b.at)
+  // Time first; events of the same millisecond in a fixed order — by kind (a plan before the work on
+  // it, an agent's start before its end), then by content — so the board never depends on the order
+  // files happened to be read in.
+  const sorted = [...events]
+    .map(e => ({ e, r: KIND_ORDER.indexOf(e.kind), k: JSON.stringify(e) }))
+    .sort((a, b) => a.e.at - b.e.at || a.r - b.r || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
+    .map(x => x.e)
   const tracks = new Map<string, RoadmapTrack>()
   const sessions = new Map<string, RoadmapSession>()
   const agents = new Map<string, RoadmapAgent>()
@@ -129,7 +137,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         why: t.why,
         scope: t.scope,
         doneWhen: t.doneWhen,
-        review: t.review,
+        // A re-laid step keeps its review policy unless the plan raises it: a plan (an agent's) never
+        // lowers what an earlier plan required.
+        review: stronger(t.review, old?.steps.find(x => x.id === id)?.review),
         reviews: [],
         agents: [],
         backlog: false,
@@ -143,7 +153,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         updatedAt: e.at,
         backlog: false,
         archived: false,
-        review: e.review ?? old?.review,
+        review: stronger(e.review, old?.review),
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
@@ -189,7 +199,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       }
     } else if (e.kind === 'review') {
       const k = key(e.track, e.id)
-      reviews.set(k, [...(reviews.get(k) ?? []), { actor: e.actor, session: e.session, verdict: e.verdict, at: e.at, evidence: e.evidence, note: e.note }])
+      reviews.set(k, [...(reviews.get(k) ?? []), { actor: e.actor, session: e.session, verdict: e.verdict, at: e.at, evidence: e.evidence, note: e.note, via: e.via }])
     } else if (e.kind === 'agent-end') {
       const a = agents.get(e.agentId)
       if (a && a.status === 'running') {
@@ -243,12 +253,17 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       const work = said.filter(w => w.origin !== 'person' && (w.status === 'running' || w.status === 'done'))
       const last = work[work.length - 1]
       step.implementer = last?.actor || last?.session ? { actor: last.actor ?? 'unknown', session: last.session ?? '' } : undefined
-      const attempt = [...said].reverse().find(w => w.status === 'running')?.at ?? 0
-      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at >= attempt).sort((a, b) => a.at - b.at)
+      // A review counts only if it comes after the work it reviews: after the step last went running,
+      // or — with no running — after the worker's first done. Same millisecond does not count.
+      const lastRun = [...said].reverse().find(w => w.status === 'running')
+      const firstDone = work.find(w => w.status === 'done')
+      const attempt = lastRun?.at ?? firstDone?.at ?? Number.POSITIVE_INFINITY
+      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at > attempt).sort((a, b) => a.at - b.at)
       if (step.review?.required) {
         const counted = step.reviews.filter(r => qualifies(step.review!, step.implementer, r))
-        const latestReview = counted[counted.length - 1]
-        step.reviewState = !latestReview ? 'missing' : latestReview.verdict === 'fail' ? 'failed' : 'satisfied'
+        const latestAt = counted.length ? counted[counted.length - 1]!.at : undefined
+        const latest = counted.filter(r => r.at === latestAt)
+        step.reviewState = !latest.length ? 'missing' : latest.some(r => r.verdict === 'fail') ? 'failed' : 'satisfied'
         // A worker's done waits for a qualifying review; the person's own done is final (an override).
         const doneWord = [...said].reverse().find(w => w.status === 'done')
         if (status === 'done' && doneWord && doneWord.origin !== 'person' && step.reviewState !== 'satisfied') {
@@ -472,7 +487,22 @@ function applyTriage(
 
 /** The model family an actor belongs to: `claude`, `codex`, … (`claude-opus` and `claude` are one). */
 export function family(actor: string | undefined): string {
-  return (actor ?? 'unknown').toLowerCase().split(/[-:\s@/·]/)[0] || 'unknown'
+  // The leading letters only: claude, Claude, claude-opus, claude_code, claude.opus are all "claude".
+  return (actor ?? '').toLowerCase().match(/^[a-z]+/)?.[0] ?? 'unknown'
+}
+
+const STRENGTH = { any: 1, 'other-session': 2, 'cross-model': 3 } as const
+
+function policyRank(p: RoadmapReviewPolicy | undefined): number {
+  if (!p?.required) return 0
+  return (STRENGTH[p.independence ?? 'cross-model'] ?? 1) * 2 + (p.mode === 'adversarial' ? 1 : 0)
+}
+
+/** The stricter of two policies: a later plan can raise a step's review policy, never lower it. */
+export function stronger(next: RoadmapReviewPolicy | undefined, prev: RoadmapReviewPolicy | undefined): RoadmapReviewPolicy | undefined {
+  if (!prev) return next
+  if (!next) return prev
+  return policyRank(next) >= policyRank(prev) ? next : prev
 }
 
 /** Whether a review counts under a policy, given who implemented the step. */
@@ -589,7 +619,7 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
       : s.review
         ? 'Review: not required for this step.'
         : '',
-    ...s.reviews.map(r => `  review by ${r.actor}: ${r.verdict}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`),
+    ...s.reviews.map(r => `  review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
     dependents.length ? `Unblocks:\n${dependents.map(x => `  ${x}`).join('\n')}` : '',
     s.evidence ? `Last evidence: ${s.evidence}` : '',

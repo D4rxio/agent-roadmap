@@ -33,6 +33,8 @@ export type ActionContext = {
   track?: string
   /** The step this chat holds, if any. */
   focus?: string
+  /** How `actor` was established (see the review event's `via`). */
+  via?: string
   /** What this machine offers for a review by another model, e.g. Codex installed beside Claude. */
   hints?: { codexInstalled?: boolean; cli?: string }
 }
@@ -70,6 +72,9 @@ export function readPolicy(raw: unknown): { policy?: RoadmapReviewPolicy; error?
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object') return { error: 'review must be an object: { required, independence, mode }' }
   const r = raw as Record<string, unknown>
+  if (r.required !== true && r.required !== false && r.required !== 'true' && r.required !== 'false') {
+    return { error: 'review.required must be true or false — say it explicitly; { "required": false } opts out on purpose' }
+  }
   const required = r.required === true || r.required === 'true'
   const independence = r.independence === undefined ? (required ? 'cross-model' : 'any') : r.independence
   if (!INDEPENDENCE.includes(independence as never)) {
@@ -154,7 +159,16 @@ export function planAction(ctx: ActionContext, input: Record<string, unknown>): 
   const dangling = [
     ...new Set(would.tracks.find(t => t.name === track)?.steps.flatMap(x => x.blockedBy.filter(r => !known.has(r))) ?? []),
   ]
-  const warn = dangling.length ? ` Note: blocked_by names steps that do not exist (yet): ${dangling.join(', ')}.` : ''
+  const laidOut = would.tracks.find(t => t.name === track)
+  const kept = phases.flatMap(p =>
+    p.steps.filter(s => s.review && JSON.stringify(laidOut?.steps.find(x => x.id === s.id)?.review) !== JSON.stringify(s.review)).map(s => s.id),
+  )
+  const keptTrack = trackPolicy.policy && JSON.stringify(laidOut?.review) !== JSON.stringify(trackPolicy.policy)
+  const warn =
+    (dangling.length ? ` Note: blocked_by names steps that do not exist (yet): ${dangling.join(', ')}.` : '') +
+    (kept.length || keptTrack
+      ? ` Kept the stricter review policy already in force for ${[...(keptTrack ? ['the track'] : []), ...kept].join(', ')}: a plan can raise a policy, not lower it (the person may still confirm a step without review in the pane).`
+      : '')
   return {
     ok: true,
     text: `Track "${track}" laid out: ${phases.length} phases, ${ids.size} steps.${warn}`,
@@ -302,6 +316,9 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
   const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
   if (!ref || !step) return unknownStep(ctx, input.step)
+  if (!step.implementer && step.status !== 'done' && step.status !== 'awaiting') {
+    return refused(`${ref.track}/${ref.id} has no work to review yet: a review counts only after the step is worked on (running or done).`)
+  }
   const verdict = input.verdict
   if (verdict !== 'pass' && verdict !== 'findings' && verdict !== 'fail') {
     return refused('verdict is pass, findings (passed with findings to follow up) or fail.')
@@ -316,6 +333,7 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
     verdict,
     evidence: text(input.evidence),
     note: text(input.note),
+    via: ctx.via,
   }
   const ref2 = `${ref.track}/${ref.id}`
   const s = after(ctx, [ev], ref.track, ref.id)

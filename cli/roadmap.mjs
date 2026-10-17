@@ -16,8 +16,11 @@
 //   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …]
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
-// Identity: --session / $ROADMAP_SESSION (default: one per actor, project and day), --actor /
-// $ROADMAP_ACTOR (default "codex"), --title / $ROADMAP_TITLE (default "<Actor> · <project>").
+// Identity: --session / $ROADMAP_SESSION (default: one per actor, project and day), --title /
+// $ROADMAP_TITLE (default "<Actor> · <project>"). The actor is read from the environment when it can be:
+// inside Codex's sandbox ($CODEX_SANDBOX) it is "codex", inside Claude Code ($CLAUDECODE) it is "claude",
+// and --actor cannot change either. Elsewhere --actor / $ROADMAP_ACTOR (default "codex") is a declaration,
+// recorded as such: a cross-model review is only as independent as the identity behind it.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
@@ -40,7 +43,13 @@ for (let i = 0; i < argv.length; i++) {
 const [command, ...args] = rest
 
 const DIR = process.env.CLAUDE_ROADMAP_DIR || join(homedir(), '.claude', 'roadmap')
-const actor = String(flags.actor || process.env.ROADMAP_ACTOR || 'codex')
+// Codex launched from Claude Code inherits CLAUDECODE, so the sandbox marker is checked first.
+const detected = process.env.CODEX_SANDBOX ? ['codex', 'codex-sandbox'] : process.env.CLAUDECODE ? ['claude', 'claude-code-env'] : undefined
+const actor = detected ? detected[0] : String(flags.actor || process.env.ROADMAP_ACTOR || 'codex')
+const via = detected ? detected[1] : 'declared'
+if (detected && flags.actor && String(flags.actor) !== actor) {
+  process.stderr.write(`roadmap: --actor ${flags.actor} ignored: this runs inside ${actor === 'codex' ? 'Codex' : 'Claude Code'}, so the actor is ${actor}\n`)
+}
 const project = basename(process.cwd())
 const day = new Date().toISOString().slice(0, 10)
 const session = String(
@@ -148,7 +157,7 @@ const offset = -new Date().getTimezoneOffset()
 function act(run, activity) {
   const { events, lives } = load()
   const old = existsSync(join(DIR, 'live', `${session}.json`)) ? parse(readFileSync(join(DIR, 'live', `${session}.json`), 'utf8')) : undefined
-  const r = run({ events, lives, now: Date.now(), session, actor, focus: old?.focus })
+  const r = run({ events, lives, now: Date.now(), session, actor, via, focus: old?.focus })
   if (!r.ok) fail(r.text)
   if (r.emit.length) sessionEvent(events)
   for (const ev of r.emit) emit(ev)
