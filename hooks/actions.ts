@@ -243,6 +243,21 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
   if (!ref || !now.tracks.find(t => t.name === ref.track)?.steps.some(s => s.id === ref.id)) return unknownStep(ctx, input.step)
   const ref2 = `${ref.track}/${ref.id}`
+  // Running means "I am working on this step's implementation". On work already reported done and waiting
+  // (for its review, or the person), it reopens that work: the report no longer counts and the writer
+  // becomes its implementer. A reviewer reaching for "running" would undo what it came to review — so it
+  // takes an explicit reopen.
+  const current = now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+  const reopen = input.reopen === true || input.reopen === 'true'
+  if (status === 'running' && current?.status === 'awaiting' && current.reportedAt !== undefined && !reopen) {
+    return refused(
+      `${ref2} is reported done and waits for ${current.reviewPending || current.reviewState === 'reviewed' ? 'its review' : "the person's confirmation"}. ` +
+        (current.review?.required
+          ? `Reviewing it? Do not mark it running — record your verdict with roadmap review ${ref2} (\`--start\` first shows you are on it). `
+          : '') +
+        'Marking it running reopens the work: the report stops counting and you become its implementer. If that is what you mean, pass reopen.',
+    )
+  }
   // A move hands the obligation to a step that exists, is not this one, and does not lead back here.
   let movedTo: string | undefined
   if (status === 'moved') {
@@ -368,6 +383,18 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   }
   if (ctx.channel === 'cli' && family(ctx.actor) === 'claude') {
     return refused('Claude records reviews with its own roadmap review tool, where the host vouches for who it is — not through the CLI.')
+  }
+  // Starting a review is this chat's activity, not the step's state: nothing is written, the step and its
+  // report stay as they are, and Working now shows the chat on it.
+  if (input.start === true || input.start === 'true') {
+    const r2 = `${ref.track}/${ref.id}`
+    return {
+      ok: true,
+      text: `Reviewing ${r2}: the step stays as reported. Read its brief (roadmap step ${r2}), then record your verdict with roadmap review ${r2} --verdict pass|findings|fail --evidence "…".`,
+      emit: [],
+      track: ref.track,
+      focus: r2,
+    }
   }
   const verdict = input.verdict
   if (verdict !== 'pass' && verdict !== 'findings' && verdict !== 'fail') {

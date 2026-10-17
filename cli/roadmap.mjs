@@ -18,6 +18,7 @@
 //                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
 //   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …]
+//   roadmap review <ref> --start        say you are reviewing it (writes nothing; never mark a step running to review it)
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
 // Identity: --session / $ROADMAP_SESSION (default: one per actor, project and day), --title /
@@ -278,6 +279,7 @@ switch (command) {
           to: flags.to,
           priority: flags.priority,
           backlog: flags.backlog,
+          reopen: yes(flags.reopen),
         }),
       `roadmap mark ${args[0] ?? ''}`,
     )
@@ -300,7 +302,7 @@ switch (command) {
     break
   case 'review':
     act(
-      ctx => actions.reviewAction(ctx, { step: args[0], verdict: flags.verdict, evidence: flags.evidence, note: flags.note }),
+      ctx => actions.reviewAction(ctx, { step: args[0], verdict: flags.verdict, evidence: flags.evidence, note: flags.note, start: yes(flags.start) }),
       `roadmap review ${args[0] ?? ''}`,
     )
     break

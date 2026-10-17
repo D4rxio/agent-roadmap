@@ -81,6 +81,10 @@ Any tool may read it, and append to it under the same rules, so other agents and
   account no agent can prove which model wrote a review — `codex sandbox` runs any command exactly as a
   Codex session would, and the implementer's own reports are no better attested — so the person is the
   one who vouches. `any` and `other-session` policies close on a qualifying pass as before.
+- A worker's `running` on a step whose work is reported done and waiting reopens that work (the report
+  stops counting; the writer becomes its implementer). Writers refuse it unless asked to reopen on
+  purpose; a reviewer records a `review` instead, and "I am reviewing" is a chat's activity (its live
+  file), never an event.
 - A review is written by the reviewer itself, under its own `session` and `actor`, with `via` saying how
   the actor was established: `claude-code` (the mod's own tool, run by the host), `process` (the CLI found
   the nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the process

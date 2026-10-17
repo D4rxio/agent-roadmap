@@ -3,6 +3,14 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **A reviewer could reopen the work it came to review.** Marking a step `running` once its work is
+  reported done reopened it: the report stopped counting and the reviewer became its implementer. Now
+  that is refused unless asked on purpose (`reopen` / `--reopen`); `roadmap review <ref> --start` shows a
+  review in progress without touching the step, and the step's brief tells a reviewer up front.
+
 ## [0.5.1] — 2026-10-17
 
 ### Added

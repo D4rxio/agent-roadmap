@@ -2457,6 +2457,48 @@ test('the pane names whose review is owed: the other model by name, else in gene
   expect(whoseReview({ review: { independence: 'any' } })).toBe('a review')
 })
 
+test('a reviewer cannot reopen the work it came to review by marking it running', async () => {
+  const cross = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const plan = { kind: 'plan', at: 1, session: 's', track: 'a', phases: [{ name: 'P', steps: [{ id: '1', title: 'Harness', review: cross }, { id: '2', title: 'Gate', checkpoint: true, review: { required: false } }] }] } as RoadmapEvent
+  const claude = (events: RoadmapEvent[], now: number) => ({ events, lives: [], now, session: 'c1', actor: 'claude', via: 'claude-code', channel: 'tool' as const })
+  const codex = (events: RoadmapEvent[], now: number) => ({ events, lives: [], now, session: 'x1', actor: 'codex', via: 'codex-sandbox', channel: 'cli' as const })
+  let events: RoadmapEvent[] = [plan]
+  events = [...events, ...markAction(claude(events, 10), { step: 'a/1', status: 'running' }).emit]
+  events = [...events, ...doneAction(claude(events, 20), { step: 'a/1', shipped: 'harness' }).emit]
+  const step = (evs: RoadmapEvent[], id = '1') => fold(evs, [], 99).tracks[0]!.steps.find(x => x.id === id)!
+  expect(step(events).reviewPending).toBe(true)
+  // The reviewer's reflex — mark it running — is refused, and says what to do instead.
+  const reflex = markAction(codex(events, 30), { step: 'a/1', status: 'running' })
+  expect(reflex.ok).toBe(false)
+  expect(reflex.text).toContain('Reviewing it? Do not mark it running')
+  expect(reflex.text).toContain('roadmap review a/1')
+  // Saying "I am reviewing" writes nothing: the report and its implementer stay.
+  const start = reviewAction(codex(events, 30), { step: 'a/1', start: true })
+  expect(start.ok).toBe(true)
+  expect(start.emit).toEqual([])
+  expect(start.focus).toBe('a/1')
+  // The verdict then counts for Claude's work.
+  events = [...events, ...reviewAction(codex(events, 40), { step: 'a/1', verdict: 'pass', evidence: 'ok' }).emit]
+  expect(step(events).implementer?.actor).toBe('claude')
+  expect(step(events).reviewState).toBe('reviewed')
+  // Reopening on purpose still works, and says so in its consequences.
+  const reopened = markAction(codex([...events.slice(0, 3)], 50), { step: 'a/1', status: 'running', reopen: true })
+  expect(reopened.ok).toBe(true)
+  expect(step([...events.slice(0, 3), ...reopened.emit]).implementer?.actor).toBe('codex')
+  // A checkpoint awaiting the person is guarded the same way (without the review hint).
+  let cp: RoadmapEvent[] = [plan]
+  cp = [...cp, ...markAction(claude(cp, 10), { step: 'a/2', status: 'running' }).emit]
+  cp = [...cp, ...doneAction(claude(cp, 20), { step: 'a/2', shipped: 'gate' }).emit]
+  const cpRun = markAction(codex(cp, 30), { step: 'a/2', status: 'running' })
+  expect(cpRun.ok).toBe(false)
+  expect(cpRun.text).toContain("waits for the person's confirmation")
+  expect(cpRun.text).not.toContain('Reviewing it?')
+  // A step not yet reported runs as before.
+  expect(markAction(codex([plan], 5), { step: 'a/1', status: 'running' }).ok).toBe(true)
+  // The brief tells a reviewer up front.
+  expect(brief(fold(events.slice(0, 3), [], 99), 'a', '1')).toContain('Reviewing it? Do not mark it running')
+})
+
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
   const plan = {
     kind: 'plan',

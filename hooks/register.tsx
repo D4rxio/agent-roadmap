@@ -757,8 +757,9 @@ export const register: Register = on => {
           verdict: { type: 'string', enum: ['pass', 'findings', 'fail'] },
           evidence: { type: 'string', description: 'What the review checked and found.' },
           note: { type: 'string' },
+          start: { type: 'boolean', description: 'Only say you are reviewing it now (no verdict yet): the step stays as reported.' },
         },
-        required: ['step', 'verdict'],
+        required: ['step'],
       },
     })
     await $.tool.register({
@@ -785,6 +786,11 @@ export const register: Register = on => {
           priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3', 'none'] },
           backlog: { type: 'boolean' },
           reason: { type: 'string', description: 'Required with status "skipped" (why it will not be done) or "moved" (why it moved).' },
+          reopen: {
+            type: 'boolean',
+            description:
+              'With status "running" on work already reported done and waiting (for review or the person): reopen it, on purpose. A reviewer never needs this — use the review tool.',
+          },
           to: { type: 'string', description: 'With status "moved": the step ("<track>/<id>", or "<id>" in the same track) that now carries the obligation.' },
           evidence: { type: 'string', description: 'What shows it: tests passed, commit, PR, measurement.' },
           note: { type: 'string', description: 'A few words: blocker, next step.' },

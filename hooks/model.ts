@@ -1221,6 +1221,9 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
     s.why ? `Why: ${s.why}` : 'Why: (not written — ask, or infer it from the track and say so)',
     s.scope ? `Scope: ${s.scope}` : '',
     s.doneWhen ? `Done when: ${s.doneWhen}` : 'Done when: (not written — agree it before you call it done)',
+    s.review?.required && s.status === 'awaiting' && s.reportedAt !== undefined
+      ? `Reviewing it? Do not mark it running — that reopens the work for its implementer. Record your verdict with roadmap review (roadmap review ${track}/${id} --start shows you are on it).`
+      : '',
     s.review?.required
       ? `Review: ${policyText(s.review)}${s.implementer ? ` · implemented by ${family(s.implementer.actor)}` : ''}${
           s.review.independence === 'cross-model' && s.implementer ? ` → the reviewer must not be ${family(s.implementer.actor)}` : ''
