@@ -249,7 +249,7 @@ switch (command) {
     const shown = model.forProject(b, yes(flags.all) ? '*' : projectKey)
     if (args[0] && !shown.tracks.some(x => x.name === args[0])) fail(`no track "${args[0]}" in this project (--all for every project)`)
     // One track: its steps, and the steps elsewhere they wait on or that wait on them.
-    const g = model.chainGraph(shown)
+    const g = model.chainGraph(b, yes(flags.all) ? '*' : projectKey)
     const keep = args[0] ? new Set(g.edges.filter(e => e.from.startsWith(`${args[0]}/`) || e.to.startsWith(`${args[0]}/`)).flatMap(e => [e.from, e.to])) : undefined
     const picked = keep ? { ...g, nodes: g.nodes.filter(n => keep.has(n.ref)), edges: g.edges.filter(e => keep.has(e.from) && keep.has(e.to)) } : g
     const text = model.mermaidOf(picked) + '\n'

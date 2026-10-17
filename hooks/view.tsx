@@ -10,6 +10,8 @@ export type RoadmapView = 'tracks' | 'days' | 'backlog' | 'chains'
 export type PaneData = {
   /** The board for the project shown (its tracks and those not placed in any); `projects` lists them all. */
   board: RoadmapBoard
+  /** The whole board, every project: what the Chains tab draws from (a chain may cross projects). */
+  whole?: RoadmapBoard
   /** The project shown: a key, or '*' for every project. */
   project?: string
   /** This chat's own project. */
@@ -244,7 +246,7 @@ export function chainSvg(g: ChainGraph): { svg: string; width: number; height: n
     return (
       `<g${faded}><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
       `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"/>` +
-      `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(`${ICONS[n.status]} ${n.ref}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`)}</text>` +
+      `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(`${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`)}</text>` +
       `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, 26))}</text></g>`
     )
   })
@@ -258,7 +260,8 @@ export function chainSvg(g: ChainGraph): { svg: string; width: number; height: n
 
 function chainsView(els: Els, d: PaneData) {
   const { Box, Text, Svg } = els
-  const g = chainGraph(d.board)
+  // From the whole board, so a chain into another project keeps its arrows; scoped to the project shown.
+  const g = chainGraph(d.whole ?? d.board, d.project)
   const mermaid = mermaidOf(g)
   return (
     <Box key="chains" flexDirection="column">

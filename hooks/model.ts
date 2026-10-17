@@ -818,15 +818,22 @@ const OPEN: RoadmapStatus[] = ['todo', 'running', 'blocked', 'awaiting', 'failed
  */
 function chainsOf(tracks: Map<string, RoadmapTrack>, sessions: Map<string, RoadmapSession>, agents: Map<string, RoadmapAgent>) {
   const steps = new Map<string, RoadmapStep>()
-  for (const t of tracks.values()) for (const s of t.steps) steps.set(`${t.name}/${s.id}`, s)
+  const owner = new Map<string, RoadmapTrack>()
+  for (const t of tracks.values()) for (const s of t.steps) {
+    steps.set(`${t.name}/${s.id}`, s)
+    owner.set(`${t.name}/${s.id}`, t)
+  }
   // A reference to a moved step stands for the end of its chain of moves.
   const resolve = (ref: string) => {
     const s = steps.get(ref)
     return s?.status === 'moved' ? s.movedFinal : ref
   }
+  // Open, and not set aside — on its own or with its whole track (backlog or archived): the Chains tab
+  // leaves those out too, so the counts and the graph tell the same story.
   const open = (ref: string) => {
     const s = steps.get(ref)
-    return !!s && OPEN.includes(s.status) && !s.backlog
+    const t = owner.get(ref)
+    return !!s && OPEN.includes(s.status) && !s.backlog && !!t && !t.backlog && !t.archived
   }
   const dependents = new Map<string, Set<string>>()
   for (const [ref, s] of steps) {
@@ -894,6 +901,8 @@ export type ChainNode = {
   layer: number
   /** Row within its column. */
   row: number
+  /** The project it lies in, when the graph shows another one's chains (a dependency across projects). */
+  external?: string
 }
 export type ChainEdge = { from: string; to: string; moved: boolean; critical: boolean }
 export type ChainGraph = { nodes: ChainNode[]; edges: ChainEdge[]; layers: number; rows: number }
@@ -904,7 +913,12 @@ export type ChainGraph = { nodes: ChainNode[]; edges: ChainEdge[]; layers: numbe
  * where its obligation went. Columns follow the longest path of prerequisites, so a chain reads left to
  * right; the longest chain of open steps is marked. Sets aside backlog and archived tracks. No time axis.
  */
-export function chainGraph(board: RoadmapBoard): ChainGraph {
+export function chainGraph(board: RoadmapBoard, project?: string): ChainGraph {
+  // `board` is the whole board, so a chain crossing into another project keeps its arrows; `project` keeps
+  // the chains that touch that project's (or unplaced) steps and marks the steps of other projects.
+  const scope = project && project !== '*' ? project : undefined
+  const every = new Map<string, RoadmapStep>()
+  for (const t of board.tracks) for (const s of t.steps) every.set(`${t.name}/${s.id}`, s)
   // By name, not by recent activity: the same plan always draws (and exports) the same way.
   const tracks = board.tracks.filter(t => !t.backlog && !t.archived).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const order = new Map(tracks.map((t, i) => [t.name, i]))
@@ -912,14 +926,37 @@ export function chainGraph(board: RoadmapBoard): ChainGraph {
   for (const t of tracks) t.steps.forEach((s, i) => { if (!s.backlog) steps.set(`${t.name}/${s.id}`, { t, s, at: i }) })
   const edges: ChainEdge[] = []
   // A step waiting on a moved step waits on where its obligation went: the arrow comes from there.
+  // (Read over every track: the moved step may lie in a track set aside, its target in a live one.)
   const now = (dep: string) => {
-    const m = steps.get(dep)?.s
+    const m = every.get(dep)
     return m?.status === 'moved' && m.movedFinal && steps.has(m.movedFinal) ? m.movedFinal : dep
   }
   for (const [ref, { s }] of steps) {
     for (const dep of new Set(s.blockedBy.map(now))) if (steps.has(dep) && dep !== ref) edges.push({ from: dep, to: ref, moved: false, critical: false })
     if (s.status === 'moved' && s.movedTo && steps.has(s.movedTo) && s.movedTo !== ref) edges.push({ from: ref, to: s.movedTo, moved: true, critical: false })
   }
+  if (scope) {
+    // Keep each chain that reaches a step of this project (or one placed nowhere), whole.
+    const near = new Map<string, string[]>()
+    for (const e of edges) {
+      near.set(e.from, [...(near.get(e.from) ?? []), e.to])
+      near.set(e.to, [...(near.get(e.to) ?? []), e.from])
+    }
+    const mine = (ref: string) => {
+      const p = steps.get(ref)?.t.project
+      return !p || p === scope
+    }
+    const keep = new Set<string>()
+    const stack = [...near.keys()].filter(mine)
+    while (stack.length) {
+      const r = stack.pop()!
+      if (keep.has(r)) continue
+      keep.add(r)
+      stack.push(...(near.get(r) ?? []))
+    }
+    edges.splice(0, edges.length, ...edges.filter(e => keep.has(e.from) && keep.has(e.to)))
+  }
+  const projectName = (key: string) => (board.projects ?? []).find(p => p.key === key)?.name ?? projectLabel(key)
   const used = new Set(edges.flatMap(e => [e.from, e.to]))
   const into = new Map<string, string[]>()
   const out = new Map<string, string[]>()
@@ -976,7 +1013,8 @@ export function chainGraph(board: RoadmapBoard): ChainGraph {
     const l = layer.get(ref) ?? 0
     const row = rowsIn.get(l) ?? 0
     rowsIn.set(l, row + 1)
-    return { ref, track: t.name, id: s.id, title: s.title, status: s.status, checkpoint: s.checkpoint, next: t.next === ref, critical: critical.has(ref), layer: l, row }
+    const external = scope && t.project && t.project !== scope ? projectName(t.project) : undefined
+    return { ref, track: t.name, id: s.id, title: s.title, status: s.status, checkpoint: s.checkpoint, next: t.next === ref, critical: critical.has(ref), layer: l, row, external }
   })
   edges.sort((a, b) => byPlace(a.from, b.from) || byPlace(a.to, b.to))
   return { nodes, edges, layers: Math.max(0, ...nodes.map(n => n.layer + 1)), rows: Math.max(0, ...rowsIn.values()) }
@@ -984,7 +1022,9 @@ export function chainGraph(board: RoadmapBoard): ChainGraph {
 
 /** A node id Mermaid accepts, stable for the same step: letters, digits and underscores only. */
 function mermaidId(ref: string): string {
-  return 's_' + [...ref].map(c => (/[A-Za-z0-9]/.test(c) ? c : `_${c.charCodeAt(0).toString(16)}_`)).join('')
+  // Each character whole (a string iterates by code point): 😀 and 😁 differ, as they must. Anything but a
+  // letter or a digit — "_" included — is written as its code, so no two refs meet.
+  return 's_' + [...ref].map(c => (/[A-Za-z0-9]/.test(c) ? c : `_${c.codePointAt(0)!.toString(16)}_`)).join('')
 }
 
 /**
@@ -992,7 +1032,8 @@ function mermaidId(ref: string): string {
  * Gitea render it). The same board always gives the same text, so a diff shows only what changed.
  */
 export function mermaidOf(g: ChainGraph, opts: { fence?: boolean } = {}): string {
-  const label = (n: ChainNode) => `${ICONS[n.status]} ${n.ref} ${n.title}`.replace(/"/g, '#quot;').replace(/[\r\n]+/g, ' ')
+  const label = (n: ChainNode) =>
+    `${ICONS[n.status]} ${n.ref} ${n.title}${n.external ? ` (in project ${n.external})` : ''}`.replace(/"/g, '#quot;').replace(/[\r\n]+/g, ' ')
   const lines = ['flowchart LR']
   if (g.nodes.length === 0) lines.push('  empty["no dependencies between steps yet"]')
   for (const n of g.nodes) {
@@ -1036,7 +1077,7 @@ export function chainText(g: ChainGraph): string[] {
       return
     }
     seen.add(ref)
-    lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} ${n.title}${marks}`)
+    lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} ${n.title}${n.external ? ` (in project ${n.external})` : ''}${marks}`)
     for (const e of kids.get(ref) ?? []) walk(e.to, indent + '   ', e)
   }
   for (const n of g.nodes) if (!hasParent.has(n.ref)) walk(n.ref, '')

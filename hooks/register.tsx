@@ -898,6 +898,7 @@ export const register: Register = on => {
       const shown = picked || journal.project || '*'
       return drawPane(els, {
         board: forProject(await read($, board), shown),
+        whole: await read($, board),
         project: shown,
         here: journal.project,
         onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),

@@ -2221,12 +2221,60 @@ test('the chain graph: boxes and arrows left to right, moves dashed, the longest
   expect(mermaidOf(chainGraph(fold([plan(1, 'z', [{ id: '1', title: 'Solo' }])], [], 9)))).toContain('no dependencies between steps yet')
 })
 
+test('chains, second round: set-aside tracks count nowhere, chains cross projects, every character keeps its id', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, steps: object[], project?: string) =>
+    ({ kind: 'plan', at, session: 's', track, project, phases: [{ name: 'P', steps: steps.map(x => ({ review: off, ...x })) }] }) as RoadmapEvent
+  const shelve = (at: number, track: string) => ({ kind: 'triage', at, session: 'p', track, backlog: true, origin: 'person' }) as RoadmapEvent
+  // 4.1: a track in the backlog neither adds to what a/1 unblocks nor lengthens its chain.
+  const shelved = [plan(1, 'a', [{ id: '1', title: 'Base' }]), plan(2, 'b', [{ id: '1', title: 'Later', blockedBy: ['a/1'] }, { id: '2', title: 'Then', blockedBy: ['1'] }]), shelve(3, 'b')]
+  const sb = fold(shelved, [], 99)
+  expect(sb.tracks.find(t => t.name === 'a')!.steps[0]!.unblocks).toBe(0)
+  expect(sb.tracks.find(t => t.name === 'a')!.longest).toBe(1)
+  expect(chainGraph(sb).nodes.length).toBe(0)
+  // 4.2: a chain into another project keeps its arrow, with the other project named — from either side.
+  const cross = fold([plan(1, 'a', [{ id: '1', title: 'Base' }], '/repos/a'), plan(2, 'b', [{ id: '1', title: 'Uses it', blockedBy: ['a/1'] }], '/repos/b')], [], 99)
+  const fromB = chainGraph(cross, '/repos/b')
+  expect(fromB.edges.map(e => `${e.from}->${e.to}`)).toEqual(['a/1->b/1'])
+  expect(fromB.nodes.find(n => n.ref === 'a/1')?.external).toBe('a')
+  expect(fromB.nodes.find(n => n.ref === 'b/1')?.external).toBe(undefined)
+  expect(mermaidOf(fromB)).toContain('a/1 Base (in project a)')
+  expect(chainGraph(cross, '/repos/a').nodes.find(n => n.ref === 'b/1')?.external).toBe('b')
+  // … and a chain wholly in another project stays out of this one.
+  const apart = fold([plan(1, 'a', [{ id: '1', title: 'X' }, { id: '2', title: 'Y', blockedBy: ['1'] }], '/repos/a'), plan(2, 'b', [{ id: '1', title: 'Z' }], '/repos/b')], [], 99)
+  expect(chainGraph(apart, '/repos/b').nodes.length).toBe(0)
+  // A moved step in a set-aside track still hands its dependents to where its obligation went.
+  const movedAside = fold(
+    [
+      plan(1, 'a', [{ id: '2', title: 'Target' }, { id: '3', title: 'Waits', blockedBy: ['c/1'] }]),
+      plan(2, 'c', [{ id: '1', title: 'Old' }]),
+      { kind: 'step', at: 3, session: 'p', track: 'c', id: '1', status: 'moved', movedTo: 'a/2', reason: 'r', origin: 'person' } as RoadmapEvent,
+      shelve(4, 'c'),
+    ],
+    [],
+    99,
+  )
+  expect(chainGraph(movedAside).edges.map(e => `${e.from}->${e.to}`)).toEqual(['a/2->a/3'])
+  // Mermaid ids: two emoji ids stay two nodes, and no arrow points at itself.
+  const emoji = chainGraph(fold([plan(1, 'e', [{ id: '😀', title: 'Smile' }, { id: '😁', title: 'Grin', blockedBy: ['😀'] }])], [], 9))
+  const m = mermaidOf(emoji)
+  const ids = m.split('\n').filter(l => /\["/.test(l)).map(l => l.trim().split('[')[0])
+  expect(new Set(ids).size).toBe(2)
+  const arrow = m.split('\n').find(l => l.includes('==>') || l.includes('-->'))!.trim().split(/\s+/)
+  expect(arrow[0]).not.toBe(arrow[2])
+})
+
 test('the Chains tab draws the graph (a text tree in the terminal) and copies it as Mermaid', async ($, on) => {
   const off = { required: false }
   const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [
-    { id: '1', title: 'Schema', review: off }, { id: '2', title: 'Client', blockedBy: ['1'], review: off },
+    { id: '1', title: 'Schema', blockedBy: ['ext/1'], review: off }, { id: '2', title: 'Client', blockedBy: ['1'], review: off },
   ] }] }
-  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  // A step of another project that this chat's chain waits on.
+  const ext = { kind: 'plan', at: 999, session: 's', track: 'ext', title: 'Vendor', project: '/other', phases: [{ name: 'P', steps: [{ id: '1', title: 'Vendor SDK', review: off }] }] }
+  const files = new Map<string, string>([
+    ['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)],
+    ['/home/t/.claude/roadmap/events/0999-o-x.json', JSON.stringify(ext)],
+  ])
   const under = (dir: string) =>
     [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
   on('fs.write', (_$, e) => {
@@ -2256,7 +2304,10 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'view-chains' })
     expect(await ui.find({ text: /Copy as Mermaid/ })).toBeDefined()
-    if (surface === 'terminal') expect(await ui.find({ text: /→ ⊘ api\/2 Client/ })).toBeDefined()
+    if (surface === 'terminal') {
+      expect(await ui.find({ text: /→ ⊘ api\/2 Client/ })).toBeDefined()
+      expect(await ui.find({ text: /ext\/1 Vendor SDK \(in project other\)/ })).toBeDefined()
+    }
     await ui.press({ key: 'copy-mermaid' })
     expect(copied.pop()).toContain('s_api_2f_1 ==> s_api_2f_2')
     await ui.press({ key: 'view-tracks' })
