@@ -14,6 +14,14 @@ what happened across five chats, and a fresh session knows where things stand.
 <p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, a step moved to another track, a cross-model review waiting for confirmation, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
+## What's new in 0.5.1
+
+- **Chains, easier to read** — ⤢ Wide opens the diagram in a pane of its own; this chat's step is ringed
+  and named; hover a box for its whole title; Show done brings back folded steps.
+- **A clearer pane** — what you look at stands out, its actions step back; Needs you says whose review
+  a step waits for.
+- **[Architecture notes](docs/architecture.md)** — how the modules fit together.
+
 ## What's new in 0.5.0
 
 - **Projects** — tracks belong to the repository they were laid out from; each chat sees its own.

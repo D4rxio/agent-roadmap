@@ -3,7 +3,7 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.1] — 2026-10-17
 
 ### Added
 - **Chains: ⤢ Wide, Show done, hover titles, where you are.** ⤢ Wide opens the diagram alone in a pane
@@ -162,6 +162,7 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
+[0.5.1]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.1
 [0.5.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.0
 [0.4.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.3.0
