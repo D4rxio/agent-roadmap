@@ -6,6 +6,9 @@ versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **A pane could stay blank after `/reload-plugins`.** A (re)loaded module now asks its open panes to
+  draw again (a pane left from the module before kept buttons that no longer answered), and a pane whose
+  data does not come within three seconds draws the reason instead of the host's placeholder.
 - **A reviewer could reopen the work it came to review.** Marking a step `running` once its work is
   reported done reopened it: the report stopped counting and the reviewer became its implementer. Now
   that is refused unless asked on purpose (`reopen` / `--reopen`); `roadmap review <ref> --start` shows a

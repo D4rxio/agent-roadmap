@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
-import { versionAtLeast } from '../hooks/register'
+import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, whoseReview } from '../hooks/view'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
@@ -2497,6 +2497,46 @@ test('a reviewer cannot reopen the work it came to review by marking it running'
   expect(markAction(codex([plan], 5), { step: 'a/1', status: 'running' }).ok).toBe(true)
   // The brief tells a reviewer up front.
   expect(brief(fold(events.slice(0, 3), [], 99), 'a', '1')).toContain('Reviewing it? Do not mark it running')
+})
+
+test('a pane whose data never comes says so in time, and a (re)loaded module asks its panes to redraw', async ($, on) => {
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence', review: { required: false } }] }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({ value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })) }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-stuck' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  const asked: string[] = []
+  on('ui.invalidate', (_$, e: any) => {
+    asked.push(String(e?.event ?? e))
+    return { value: undefined }
+  })
+  on('clock.sleep', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  expect(asked.some(a => a.includes('ui.render'))).toBe(true)
+  // Data that never comes: the wait ends with a reason the pane draws, instead of the host's placeholder.
+  const late = await inTime(() => Promise.resolve(), new Promise<never>(() => undefined)).then(
+    () => 'drawn',
+    (err: Error) => err.message,
+  )
+  expect(late).toContain('did not come in time')
+  // Data that comes is passed through.
+  expect(await inTime(() => new Promise(() => undefined), Promise.resolve('board'))).toBe('board')
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

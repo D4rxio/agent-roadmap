@@ -491,12 +491,27 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
   }
 }
 
+/**
+ * The pane's data, or a failure after three seconds: a read that never comes back (a module reloaded mid-
+ * way, a stuck journal read) then draws its reason instead of leaving the pane blank. If the engine has
+ * no clock to wait on, it simply waits for the data.
+ */
+export async function inTime<T>(sleep: (ms: number) => Promise<void>, work: Promise<T>): Promise<T> {
+  const late = sleep(3000).then(
+    () => {
+      throw new Error('its data did not come in time (a reload may have left it waiting)')
+    },
+    () => new Promise<never>(() => undefined),
+  )
+  return Promise.race([work, late])
+}
+
 function cannotDraw(els: any, err: unknown) {
   const { Box, Text } = els
   return (
     <Box flexDirection="column">
       <Text color="warning" wrap="wrap">{`The roadmap could not draw this pane: ${err instanceof Error ? err.message : String(err)}`}</Text>
-      <Text dimColor wrap="wrap">Restart this chat to load the plugin cleanly; other chats are not affected.</Text>
+      <Text dimColor wrap="wrap">Run /reload-plugins, or restart this chat, to load the plugin cleanly; other chats are not affected.</Text>
     </Box>
   )
 }
@@ -850,6 +865,13 @@ export const register: Register = on => {
     await noteCode($).catch(() => undefined)
     await sync($).catch(() => undefined)
     await republish($)
+    // A (re)loaded module draws its panes again: one left from the module before would keep buttons that
+    // no longer answer.
+    try {
+      $.ui.invalidate('ui.render')
+    } catch {
+      // nothing open to redraw
+    }
     // Only when there is a backlog of old loose files; a no-op otherwise.
     await compact($).catch(() => undefined)
 
@@ -999,10 +1021,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    // A pane that cannot draw says why instead of staying blank (e.g. code reloaded in a running chat),
+    // and one whose data does not come in time says so too, rather than leaving the host's placeholder.
     const els = $.ui.resolve(e)
-    // A pane that cannot draw says why instead of staying blank (e.g. code reloaded in a running chat).
     try {
-      return drawPane(els, await paneData($, e))
+      return drawPane(els, await inTime(ms => $.clock.sleep(ms), paneData($, e)))
     } catch (err) {
       return cannotDraw(els, err)
     }
@@ -1012,7 +1035,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: CHAINS }, async ($, e) => {
     const els = $.ui.resolve(e)
     try {
-      return drawChainsPane(els, { ...(await paneData($, e)), wide: true })
+      return drawChainsPane(els, { ...(await inTime(ms => $.clock.sleep(ms), paneData($, e))), wide: true })
     } catch (err) {
       return cannotDraw(els, err)
     }

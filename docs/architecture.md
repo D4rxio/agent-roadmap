@@ -126,7 +126,9 @@ write. Nothing is written when an action refuses, and the refusal says why and w
   chat may not read keys added since: every key newer than the first release is read through a safe
   reader with a fallback and written with a quiet catch.
 - **Panes.** `Pane` (the roadmap), `roadmap-chains` (the Chains diagram alone, opened wide), and the band
-  above the prompt. Both panes build their data in one `paneData`; a render that fails says why.
+  above the prompt. Both panes build their data in one `paneData`; a render that fails, or whose data
+  does not come within three seconds, says why. Each (re)load of the module asks its open panes to draw
+  again, so no pane keeps buttons wired to the module before.
 
 ## `view.tsx` — drawing
 
