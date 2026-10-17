@@ -70,7 +70,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
 ### The pane
 
 - **Tracks.** One card per workstream: progress bar (done, awaiting you, running, blocked), recent
-  momentum ("yesterday +3 · moved 14:02"), and the steps when expanded.
+  momentum ("yesterday +3 · moved 14:02"), the step to pick up next (**▸ next 2.3**: not waiting on
+  anything, nobody on it, most urgent then most unblocking) and its longest open chain (**chain 4**, in
+  steps — never days), and the steps when expanded, each with how many open steps wait on it (**⇢3**,
+  down the chain and across tracks).
   - Hover a step for **Done ✓** to finish it in one press (your word, so it also closes a checkpoint),
     or click its icon to move it ○ → ◐ → ✓.
   - Click a phase's header to open or close it; phases with work left start open, finished ones closed.

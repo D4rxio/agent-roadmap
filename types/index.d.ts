@@ -186,6 +186,11 @@ export type RoadmapStep = {
   carries?: string[]
   /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */
   stale?: boolean
+  /**
+   * Open steps waiting on this one, directly or down the chain (across tracks, and through moves: a
+   * step moved here passes on its dependents). Computed; absent on a step that is not open.
+   */
+  unblocks?: number
   /** The review policy in force (the step's, else its track's). */
   review?: RoadmapReviewPolicy
   /** Who implemented it: the last worker that started or finished it. */
@@ -229,6 +234,10 @@ export type RoadmapTrack = {
   /** Archived by the person: hidden everywhere but the Backlog tab and history, restorable. */
   archived: boolean
   triagedBy?: string
+  /** The step to pick up next: open, not waiting on anything, nobody on it — most urgent, then most unblocking. */
+  next?: string
+  /** The longest chain of open steps that starts in this track, in steps (never days). */
+  longest?: number
   /** The default review policy for the track's steps. */
   review?: RoadmapReviewPolicy
   /**

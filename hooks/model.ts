@@ -477,6 +477,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     }
   }
 
+  chainsOf(tracks, sessions, agents)
+
   return {
     // Most important first (P0 … unprioritized), then the most recently moved.
     tracks: [...tracks.values()].sort((a, b) => trackRank(a) - trackRank(b) || b.updatedAt - a.updatedAt),
@@ -806,6 +808,77 @@ function trackRank(t: RoadmapTrack): number {
 }
 
 /** P0 first, unprioritized last; ties keep the plan's order. */
+const OPEN: RoadmapStatus[] = ['todo', 'running', 'blocked', 'awaiting', 'failed']
+
+/**
+ * What waits on what, read from blocked_by across tracks: each open step's count of open steps it unblocks
+ * (directly and down the chain); for each track, the step to pick up next and its longest open chain. A
+ * dependent of a moved step waits on where the obligation went, so the chain runs through moves. Order of
+ * steps only — no dates, no durations.
+ */
+function chainsOf(tracks: Map<string, RoadmapTrack>, sessions: Map<string, RoadmapSession>, agents: Map<string, RoadmapAgent>) {
+  const steps = new Map<string, RoadmapStep>()
+  for (const t of tracks.values()) for (const s of t.steps) steps.set(`${t.name}/${s.id}`, s)
+  // A reference to a moved step stands for the end of its chain of moves.
+  const resolve = (ref: string) => {
+    const s = steps.get(ref)
+    return s?.status === 'moved' ? s.movedFinal : ref
+  }
+  const open = (ref: string) => {
+    const s = steps.get(ref)
+    return !!s && OPEN.includes(s.status) && !s.backlog
+  }
+  const dependents = new Map<string, Set<string>>()
+  for (const [ref, s] of steps) {
+    if (!open(ref)) continue
+    for (const dep of s.blockedBy) {
+      const to = resolve(dep)
+      if (!to || to === ref) continue
+      dependents.set(to, (dependents.get(to) ?? new Set()).add(ref))
+    }
+  }
+  // Open steps reachable through open dependents; the walk never loops, whatever the journal holds.
+  const below = (ref: string) => {
+    const seen = new Set<string>()
+    const stack = [...(dependents.get(ref) ?? [])]
+    while (stack.length) {
+      const r = stack.pop()!
+      if (seen.has(r) || r === ref || !open(r)) continue
+      seen.add(r)
+      stack.push(...(dependents.get(r) ?? []))
+    }
+    return seen.size
+  }
+  const depth = new Map<string, number>()
+  const deepest = (ref: string, path: Set<string>): number => {
+    if (depth.has(ref)) return depth.get(ref)!
+    if (path.has(ref)) return 0
+    path.add(ref)
+    let most = 0
+    for (const r of dependents.get(ref) ?? []) if (open(r)) most = Math.max(most, deepest(r, path))
+    path.delete(ref)
+    depth.set(ref, 1 + most)
+    return 1 + most
+  }
+  const held = new Set([...sessions.values()].filter(s => s.isLive && s.focus).map(s => s.focus!))
+  const worked = new Set([...agents.values()].filter(a => a.status === 'running' && a.track && a.step).map(a => `${a.track}/${a.step}`))
+  for (const t of tracks.values()) {
+    let longest = 0
+    const free: RoadmapStep[] = []
+    for (const s of t.steps) {
+      const ref = `${t.name}/${s.id}`
+      s.unblocks = undefined
+      if (!open(ref)) continue
+      s.unblocks = below(ref)
+      longest = Math.max(longest, deepest(ref, new Set()))
+      if (s.status === 'todo' && !held.has(ref) && !worked.has(ref)) free.push(s)
+    }
+    t.longest = longest || undefined
+    const pick = free.sort((a, b) => byPriority(a, b) || (b.unblocks ?? 0) - (a.unblocks ?? 0))[0]
+    t.next = pick ? `${t.name}/${pick.id}` : undefined
+  }
+}
+
 export function byPriority(a: RoadmapStep, b: RoadmapStep): number {
   const rank = (s: RoadmapStep) => (s.priority ? PRIORITIES.indexOf(s.priority) : PRIORITIES.length)
   return rank(a) - rank(b)
@@ -906,7 +979,9 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
         : '',
     ...s.reviews.map(r => `  review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
-    dependents.length ? `Unblocks:\n${dependents.map(x => `  ${x}`).join('\n')}` : '',
+    dependents.length
+      ? `Unblocks:${s.unblocks ? ` ${s.unblocks} open step${s.unblocks === 1 ? ' waits' : 's wait'} on it, down the chain` : ''}\n${dependents.map(x => `  ${x}`).join('\n')}`
+      : '',
     s.evidence ? `Last evidence: ${s.evidence}` : '',
     s.note ? `Last note: ${s.note}` : '',
     s.lastBy && s.lastAt ? `Last moved by: ${s.lastBy}` : '',
@@ -935,7 +1010,8 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
   if (!board.tracks.some(x => !x.archived)) lines.push('- no tracks in this project yet')
   for (const t of board.tracks.filter(x => !x.backlog && !x.archived)) {
     const { done, total } = progress(t)
-    lines.push(`- ${t.priority ? `${t.priority} ` : ''}${t.name} — ${t.title}: ${done}/${total} done`)
+    const chain = [t.next ? `next: ${t.next}` : '', (t.longest ?? 0) > 1 ? `longest open chain: ${t.longest} steps` : ''].filter(Boolean)
+    lines.push(`- ${t.priority ? `${t.priority} ` : ''}${t.name} — ${t.title}: ${done}/${total} done${chain.length ? ` (${chain.join('; ')})` : ''}`)
     // Open work, most important first: what a new session should pick up.
     const open = t.steps.filter(s => s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved' && !s.backlog).sort(byPriority)
     for (const s of open.slice(0, opts.open ?? 6)) {
@@ -962,7 +1038,8 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
           ? ` [${policyText(s.review)}${s.review.independence === 'cross-model' && s.implementer ? `: reviewer ≠ ${family(s.implementer.actor)}` : ''}${s.reviewState === 'failed' ? '; last review failed' : ''}]`
           : ''
       const carries = s.carries?.length ? ` [also answers for ${s.carries.join(', ')}]` : ''
-      lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${rv}${carries}${why}`)
+      const opens = s.unblocks ? ` [unblocks ${s.unblocks}]` : ''
+      lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${rv}${carries}${opens}${why}`)
     }
     if (open.length > (opts.open ?? 6)) lines.push(`    … ${open.length - (opts.open ?? 6)} more open`)
     const skipped = t.steps.filter(s => s.status === 'skipped')

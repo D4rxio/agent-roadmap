@@ -2090,6 +2090,88 @@ test('a chat older than some state keys still draws the pane and the band', asyn
   await band.unmount()
 })
 
+test('chains: what each step unblocks down the chain, the step to pick next, the longest open chain', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, steps: object[]) => ({ kind: 'plan', at, session: 's', track, phases: [{ name: 'P', steps: steps.map(x => ({ review: off, ...x })) }] }) as RoadmapEvent
+  const word = (at: number, track: string, id: string, status: string, extra: object = {}) =>
+    ({ kind: 'step', at, session: 'p', track, id, status, origin: 'person', actor: 'person', ...extra }) as RoadmapEvent
+  const base = [
+    plan(1, 'a', [{ id: '1', title: 'Schema' }, { id: '2', title: 'Client', blockedBy: ['1'] }, { id: '3', title: 'Docs', blockedBy: ['1'] }, { id: '4', title: 'Lint' }]),
+    plan(2, 'b', [{ id: '1', title: 'App', blockedBy: ['a/2'] }, { id: '2', title: 'Old path' }, { id: '3', title: 'Uses it', blockedBy: ['2'] }]),
+  ]
+  const at = (events: RoadmapEvent[], ref: string, lives: any[] = []) => {
+    const [t, id] = ref.split('/')
+    return fold(events, lives, 99).tracks.find(x => x.name === t)!.steps.find(x => x.id === id)!
+  }
+  const track = (events: RoadmapEvent[], name: string, lives: any[] = []) => fold(events, lives, 99).tracks.find(x => x.name === name)!
+  // Down the chain and across tracks: a/1 → a/2 → b/1, and a/1 → a/3.
+  expect(at(base, 'a/1').unblocks).toBe(3)
+  expect(at(base, 'a/2').unblocks).toBe(1)
+  expect(at(base, 'a/4').unblocks).toBe(0)
+  expect(track(base, 'a').longest).toBe(3)
+  // The step that unblocks most is next, unless something is more urgent.
+  expect(track(base, 'a').next).toBe('a/1')
+  expect(track([...base, { kind: 'triage', at: 3, session: 'p', track: 'a', id: '4', priority: 'P1', origin: 'person' } as RoadmapEvent], 'a').next).toBe('a/4')
+  // A step a chat holds is not offered as next.
+  expect(track(base, 'a', [{ session: 'c', title: 'c', at: 95, agents: [], focus: 'a/1' }]).next).toBe('a/4')
+  // A done step in the middle: what waited on it no longer waits on what came before it.
+  const midDone = [...base, word(3, 'a', '2', 'done')]
+  expect(at(midDone, 'a/1').unblocks).toBe(1)
+  expect(at(midDone, 'a/2').unblocks).toBe(undefined)
+  // Through a move: b/3 waited on b/2, whose obligation went to a/4 — so a/4 unblocks it.
+  const moved = [...base, word(3, 'b', '2', 'moved', { movedTo: 'a/4', reason: 'r' })]
+  expect(at(moved, 'a/4').unblocks).toBe(1)
+  // A set-aside step neither counts nor is offered.
+  const shelved = [...base, { kind: 'triage', at: 3, session: 'p', track: 'a', id: '3', backlog: true, origin: 'person' } as RoadmapEvent]
+  expect(at(shelved, 'a/1').unblocks).toBe(2)
+  // A loop written by hand does not hang the count.
+  const loop = [plan(1, 'x', [{ id: '1', title: 'One', blockedBy: ['2'] }, { id: '2', title: 'Two', blockedBy: ['1'] }])]
+  expect(at(loop, 'x/1').unblocks).toBe(1)
+  // Agents read it in the summary and the brief.
+  const board = fold(base, [], 99)
+  expect(summary(board)).toContain('a — a: 0/4 done (next: a/1; longest open chain: 3 steps)')
+  expect(summary(board)).toContain('a/1 Schema [unblocks 3]')
+  expect(brief(board, 'a', '1')).toContain('Unblocks: 3 open steps wait on it, down the chain')
+})
+
+test('the Tracks view marks the next step, what each step unblocks, and the longest chain', async ($, on) => {
+  const off = { required: false }
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [
+    { id: '1', title: 'Schema', review: off }, { id: '2', title: 'Client', blockedBy: ['1'], review: off }, { id: '3', title: 'Docs', blockedBy: ['2'], review: off },
+  ] }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({ value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })) }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-chain' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /▸ next 1/ })).toBeDefined()
+    expect(await ui.find({ text: /chain 3/ })).toBeDefined()
+    if (!(await ui.find({ text: /Schema/ }))) await ui.press({ key: 'fold-api' })
+    expect(await ui.find({ text: /Schema/ })).toBeDefined()
+    expect(await ui.find({ text: /⇢2/ })).toBeDefined()
+    expect(await ui.find({ text: /⇢1/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
   const plan = {
     kind: 'plan',

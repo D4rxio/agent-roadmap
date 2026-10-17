@@ -441,6 +441,9 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
     blocked ? `⊘ ${blocked}` : '',
     live ? `● ${live} live` : '',
     shelved.length ? `${shelved.length} in backlog` : '',
+    // What to pick up, and how long the road still is — in steps, never days.
+    t.next ? `▸ next ${t.next.slice(t.name.length + 1)}` : '',
+    (t.longest ?? 0) > 1 ? `chain ${t.longest}` : '',
     !t.project && (d.board.projects ?? []).length > 1 ? 'in no project' : '',
   ].filter(Boolean)
   return (
@@ -609,6 +612,8 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
                   : { text: `  ⚖ ${s.review.independence === 'cross-model' ? 'cross-model' : 'review'}`, color: 'subtle' },
             ]
           : []),
+        ...(t.next === ref ? [{ text: '  ▸ next', color: 'suggestion' }] : []),
+        ...(s.unblocks ? [{ text: `  ⇢${s.unblocks}`, dim: true }] : []),
         ...(s.addedBy ? [{ text: '  ✎ you', color: 'suggestion' }] : []),
         ...(d.focus === ref ? [{ text: '  ● this chat', color: 'warning' }] : []),
         ...d.board.sessions
