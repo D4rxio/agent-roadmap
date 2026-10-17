@@ -1106,7 +1106,7 @@ export function mermaidOf(g: ChainGraph, opts: { fence?: boolean } = {}): string
 }
 
 /** The graph as plain text, for a terminal: each chain from where it starts, one arrow per step. */
-export function chainText(g: ChainGraph): string[] {
+export function chainText(g: ChainGraph, focus?: string): string[] {
   if (g.nodes.length === 0) return []
   const node = new Map(g.nodes.map(n => [n.ref, n]))
   const kids = new Map<string, ChainEdge[]>()
@@ -1117,7 +1117,7 @@ export function chainText(g: ChainGraph): string[] {
   const walk = (ref: string, indent: string, via?: ChainEdge) => {
     const n = node.get(ref)!
     const arrow = via ? (via.moved ? '↪ ' : '→ ') : ''
-    const marks = `${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
+    const marks = `${n.ref === focus ? '  ● this chat' : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
     if (seen.has(ref)) {
       lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} (above)`)
       return

@@ -236,7 +236,7 @@ const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * on a light and a dark page), the next step outlined, the longest open chain in bold arrows, a moved
  * step's arrow dashed, steps of other tracks dashed and faded.
  */
-export function chainSvg(g: ChainGraph, opts: { maxAcross?: number } = {}): { svg: string; width: number; height: number } {
+export function chainSvg(g: ChainGraph, opts: { maxAcross?: number; focus?: string } = {}): { svg: string; width: number; height: number } {
   // At most `maxAcross` boxes side by side (what the pane's width holds); a step of the chain with more
   // goes on over further rows instead of making the picture too wide to read.
   const across = Math.max(1, Math.min(g.rows, opts.maxAcross ?? 2))
@@ -273,11 +273,14 @@ export function chainSvg(g: ChainGraph, opts: { maxAcross?: number } = {}): { sv
     const { x, y } = at.get(n.ref)!
     const [fill, stroke] = NODE_FILL[n.status]
     const faded = n.status === 'skipped' || n.status === 'moved' || n.foreign ? ' opacity="0.7"' : ''
-    const head = `${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
+    const here = n.ref === opts.focus
+    const head = `${here ? '● this chat  ' : ''}${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
+    // Where this chat is: a halo around its step, so it stands out in a long chain.
+    const halo = here ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="${(n.checkpoint ? 12 : 6) + 4}" fill="none" stroke="#f0883e" stroke-width="3"/>` : ''
     // The whole title (the box cuts it) and the status, shown on hover.
     const tip = `<title>${esc(`${n.ref} — ${n.title} (${n.status}${n.checkpoint ? ', checkpoint' : ''}${n.external ? `, project ${n.external}` : ''})`)}</title>`
     return (
-      `<g${faded}>${tip}<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
+      `<g${faded}>${tip}${halo}<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
       `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"${n.foreign ? ' stroke-dasharray="3 2"' : ''}/>` +
       `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(cut(head, fits + 6))}</text>` +
       `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, fits))}</text></g>`
@@ -336,7 +339,7 @@ function chainsView(els: Els, d: PaneData) {
       </Box>
       <Box flexDirection="row" gap={1}>
         <Text dimColor wrap="truncate-end">
-          {`▸ next · ★ longest open chain · dashed: moved or another track${!d.chainDone && g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
+          {`● this chat · ▸ next · ★ longest open chain · dashed: moved or another track${!d.chainDone && g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
         </Text>
         <Box flexGrow={1} />
         {folded
@@ -349,6 +352,16 @@ function chainsView(els: Els, d: PaneData) {
             )
           : null}
       </Box>
+      {(() => {
+        // Where this chat stands, in words: in a long chain the box alone is easy to miss.
+        const here = d.focus ? g.nodes.find(n => n.ref === d.focus) : undefined
+        if (!here) return null
+        return Line(els, 'chain-here', [
+          { text: '● this chat  ', color: 'warning', bold: true },
+          { text: `${here.ref} ${here.title}`, main: true },
+          { text: `  — level ${here.layer + 1} of ${g.layers}`, dim: true },
+        ])
+      })()}
       {g.nodes.length === 0 && folded ? (
         // Everything in this track's chains is finished: say so, rather than that nothing waits on anything.
         <Text dimColor>{`Every step in this track's chains is done (${folded}). Show done draws them.`}</Text>
@@ -358,13 +371,13 @@ function chainsView(els: Els, d: PaneData) {
         (() => {
           // As many boxes side by side as the pane's width holds (about 8 px a column), never fewer than one.
           const px = Math.max(20, d.cols) * 8
-          const drawn = chainSvg(g, { maxAcross: Math.max(1, Math.floor((px + 14) / 244)) })
+          const drawn = chainSvg(g, { maxAcross: Math.max(1, Math.floor((px + 14) / 244)), focus: d.focus })
           const fit = Math.min(1, px / drawn.width)
           // Interactive (a script-less frame): hovering a box shows its whole title.
           return <Svg key="chain-graph" source={drawn.svg} alt={`the chains of ${track ?? 'the roadmap'}`} height={Math.max(40, Math.round(drawn.height * fit))} isInteractive />
         })()
       ) : (
-        chainText(g).map((line, i) => (
+        chainText(g, d.focus).map((line, i) => (
           <Text key={`chain-${i}`} wrap="truncate-end">
             {line}
           </Text>

@@ -2294,6 +2294,10 @@ test('chains, one track at a time: its road ahead, its neighbours, no shortcuts,
   expect(g.edges.some(e => e.from === 'a/1' && e.to === 'a/3')).toBe(false)
   expect(g.edges.some(e => e.from === 'a/2' && e.to === 'a/3')).toBe(true)
   // Three steps side by side wrap to the pane's width instead of widening the picture.
+  // This chat's step is marked: in the text tree, and with a halo in the drawing.
+  expect(chainText(g, 'a/2').some(l => l.includes('a/2 Open') && l.includes('● this chat'))).toBe(true)
+  expect(chainSvg(g, { focus: 'a/2' }).svg).toContain('#f0883e')
+  expect(chainSvg(g).svg).not.toContain('#f0883e')
   const narrow = chainSvg(g, { maxAcross: 1 })
   const wide = chainSvg(g, { maxAcross: 3 })
   expect(narrow.width).toBeLessThan(wide.width)
@@ -2366,6 +2370,15 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
     await ui.press({ key: 'view-tracks' })
     await ui.unmount()
   }
+  // Pinned to api/2, the tab says where this chat stands in the chain.
+  const pinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pinned.press({ key: 'fold-api' })
+  await pinned.press({ key: 'pin-api/2' })
+  await pinned.press({ key: 'view-chains' })
+  expect(await pinned.find({ text: /● this chat/ })).toBeDefined()
+  expect(await pinned.find({ text: /level 3 of 3/ })).toBeDefined()
+  await pinned.press({ key: 'view-tracks' })
+  await pinned.unmount()
   const wide = await $.ui.mount({ ...PANE, requestId: 'roadmap-chains', surface: 'desktop' })
   expect(await wide.find({ text: /Esc closes this pane/ })).toBeDefined()
   expect(await wide.find({ text: /Copy as Mermaid/ })).toBeDefined()
