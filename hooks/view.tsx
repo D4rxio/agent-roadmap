@@ -1,5 +1,5 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import { ICONS, PRIORITIES, attention, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Els = Record<string, any>
@@ -213,6 +213,7 @@ function stepRight(s: RoadmapStep, d: PaneData): string {
   if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
   if (s.status === 'running' && s.stale) return `stale · nobody on it since ${s.lastAt ? when(s.lastAt, d.now, d.tz) : 'long ago'}`
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
+  if (s.status === 'awaiting' && s.reviewPending) return s.reviewState === 'failed' ? 'review failed' : 'review owed'
   if (s.status === 'awaiting') return s.proposed === 'skipped' ? 'skip to confirm' : 'to confirm'
   if (s.status === 'skipped') return `skipped: ${s.skipReason ?? 'no reason'}`
   if (s.status === 'failed') return s.endedAt ? `failed ${when(s.endedAt, d.now, d.tz)}` : 'failed'
@@ -326,7 +327,9 @@ function needsYou(els: Els, d: PaneData) {
             { text: '◆ ', color: 'permission' },
             { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
           ])}
-          {st.proposed === 'skipped' ? (
+          {st.reviewPending ? (
+            <Text dimColor wrap="truncate-end">{`   waits for ${st.review?.independence === 'cross-model' ? `a cross-model review (not ${family(st.implementer?.actor)})` : 'an independent review'}${st.reviewState === 'failed' ? ' — the last one failed' : ''}`}</Text>
+          ) : st.proposed === 'skipped' ? (
             <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.evidence || st.lastBy ? (
             <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}`}</Text>
@@ -342,7 +345,7 @@ function needsYou(els: Els, d: PaneData) {
                   : d.onDecide(st.track, st.id, 'done')
               }
             >
-              {st.proposed === 'skipped' ? 'Confirm skip' : 'Confirm ✓'}
+              {st.proposed === 'skipped' ? 'Confirm skip' : st.reviewPending ? 'Confirm without review' : 'Confirm ✓'}
             </Button>
             <Button
               key={`no-${st.track}-${st.id}`}
@@ -521,6 +524,15 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       {prioChip(els, d, t, s)}
       {Line(els, `title-${ref}`, [
         { text: `${s.id}  ${s.title}`, main: true, dim: s.status === 'done' || s.status === 'skipped' || s.backlog, strike: s.status === 'skipped' },
+        ...(s.review?.required
+          ? [
+              s.reviewState === 'satisfied'
+                ? { text: `  ⚖ ✓ ${s.reviews.length ? family(s.reviews[s.reviews.length - 1]!.actor) : ''}`.trimEnd(), color: 'success' }
+                : s.reviewState === 'failed'
+                  ? { text: '  ⚖ ✗ review failed', color: 'error' }
+                  : { text: `  ⚖ ${s.review.independence === 'cross-model' ? 'cross-model' : 'review'}`, color: 'subtle' },
+            ]
+          : []),
         ...(s.addedBy ? [{ text: '  ✎ you', color: 'suggestion' }] : []),
         ...(d.focus === ref ? [{ text: '  ● this chat', color: 'warning' }] : []),
         ...d.board.sessions

@@ -4,15 +4,18 @@
 // step this chat now holds, a toast). The Claude Code tools (register.tsx) and the CLI (cli/roadmap.mjs)
 // are thin layers that read, call one of these and write what it returns, so both behave the same.
 
-import type { RoadmapEvent, RoadmapLive, RoadmapPriority, RoadmapStatus } from '../types'
+import type { RoadmapEvent, RoadmapLive, RoadmapPriority, RoadmapReviewPolicy, RoadmapStatus } from '../types'
 import {
   FOLLOW_UPS,
   PRIORITIES,
   STATUSES,
   brief,
   findCycle,
+  family,
   fold,
   nextId,
+  policyText,
+  qualifies,
   parseRef,
   slug,
   summary,
@@ -30,6 +33,8 @@ export type ActionContext = {
   track?: string
   /** The step this chat holds, if any. */
   focus?: string
+  /** What this machine offers for a review by another model, e.g. Codex installed beside Claude. */
+  hints?: { codexInstalled?: boolean; cli?: string }
 }
 
 export type ActionResult = {
@@ -58,6 +63,34 @@ function after(ctx: ActionContext, extra: RoadmapEvent[], track: string, id: str
   return fold([...ctx.events, ...extra], [], ctx.now).tracks.find(t => t.name === track)?.steps.find(s => s.id === id)
 }
 
+const INDEPENDENCE = ['any', 'other-session', 'cross-model'] as const
+
+/** A review policy from tool input, or an error saying what is wrong with it. */
+export function readPolicy(raw: unknown): { policy?: RoadmapReviewPolicy; error?: string } {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object') return { error: 'review must be an object: { required, independence, mode }' }
+  const r = raw as Record<string, unknown>
+  const required = r.required === true || r.required === 'true'
+  const independence = r.independence === undefined ? (required ? 'cross-model' : 'any') : r.independence
+  if (!INDEPENDENCE.includes(independence as never)) {
+    return { error: `review.independence is one of ${INDEPENDENCE.join(', ')}` }
+  }
+  const mode = r.mode === undefined ? undefined : r.mode
+  if (mode !== undefined && mode !== 'standard' && mode !== 'adversarial') return { error: 'review.mode is standard or adversarial' }
+  return { policy: { required, independence: independence as RoadmapReviewPolicy['independence'], mode: mode as RoadmapReviewPolicy['mode'] } }
+}
+
+/** What an agent is told about a step that waits: for a review its policy requires, or for the person. */
+function waiting(s: { reviewPending?: boolean; reviewState?: string; review?: { independence?: string }; implementer?: { actor: string } } | undefined): string {
+  if (s?.reviewPending) {
+    const who = s.review?.independence === 'cross-model' ? `a cross-model review (the reviewer must not be ${family(s.implementer?.actor)})` : 'an independent review'
+    return s.reviewState === 'failed'
+      ? `waits for ${who}: the last one failed — fix the findings and have it reviewed again`
+      : `waits for ${who} before it counts as done — have it reviewed and recorded with roadmap review`
+  }
+  return "awaiting the person's confirmation (checkpoint or reopened after failure)"
+}
+
 /** Lay out (or re-lay) one track. Refuses a layout whose dependencies close a loop. */
 export function planAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
   const track = slug(String(input.track ?? ''))
@@ -77,17 +110,37 @@ export function planAction(ctx: ActionContext, input: Record<string, unknown>): 
           why: text(s.why),
           scope: text(s.scope),
           doneWhen: text(s.done_when ?? s.doneWhen),
+          review: readPolicy(s.review).policy,
+          reviewError: readPolicy(s.review).error,
         }
       })
       .filter(s => s.id && !ids.has(s.id) && ids.add(s.id)),
   }))
+  const bad = phases.flatMap(p => p.steps.filter(s => s.reviewError).map(s => `${s.id}: ${s.reviewError}`))
+  const trackPolicy = readPolicy(input.review)
+  if (trackPolicy.error) bad.push(`track: ${trackPolicy.error}`)
+  if (bad.length) return refused(`Not laid out: ${bad.join('; ')}.`)
+  // Steps new to this track must say how their work is reviewed — on the step, or as the track's
+  // default (this plan's or an earlier one's). Steps that already exist may go without.
+  const before = fold(ctx.events, [], ctx.now).tracks.find(t => t.name === track)
+  const existing = new Set(before?.steps.map(s => s.id) ?? [])
+  const fallback = trackPolicy.policy ?? before?.review
+  const unruled = phases.flatMap(p => p.steps.filter(s => !existing.has(s.id) && !s.review && !fallback).map(s => s.id))
+  if (unruled.length) {
+    return refused(
+      `Not laid out: new steps need a review policy (${unruled.join(', ')}). Give \`review\` on each new step or on the track: ` +
+        '{ "required": true, "independence": "cross-model", "mode": "adversarial" } — independence is any, ' +
+        'other-session or cross-model (a different model family from the implementer). { "required": false } opts out on purpose.',
+    )
+  }
   const planned: RoadmapEvent = {
     kind: 'plan',
     at: ctx.now,
     session: ctx.session,
     track,
     title: input.title === undefined ? undefined : String(input.title),
-    phases,
+    phases: phases.map(p => ({ name: p.name, steps: p.steps.map(({ reviewError: _e, ...step }) => step) })),
+    review: trackPolicy.policy,
     actor: ctx.actor,
   }
   const would = fold([...ctx.events, planned], [], ctx.now)
@@ -178,7 +231,7 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     s?.status === 'awaiting' && s.proposed === 'skipped'
       ? `${ref2} → skip proposed; the person confirms or rejects it in the Roadmap pane.`
       : s?.status === 'awaiting'
-        ? `${ref2} → awaiting the person's confirmation (checkpoint or reopened after failure).`
+        ? `${ref2} → ${waiting(s)}.`
         : `${ref2} → ${s?.status ?? status}.`
   return {
     ok: true,
@@ -186,7 +239,7 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     emit,
     track: ref.track,
     focus: status === 'running' ? ref2 : undefined,
-    toast: s?.status === 'done' ? `✓ ${ref2}` : s?.status === 'awaiting' ? `◆ ${ref2} awaits your confirmation` : undefined,
+    toast: s?.status === 'done' ? `✓ ${ref2}` : s?.status === 'awaiting' && !s.reviewPending ? `◆ ${ref2} awaits your confirmation` : s?.reviewPending ? `⚖ ${ref2} waits for a review` : undefined,
   }
 }
 
@@ -229,8 +282,7 @@ export function doneAction(ctx: ActionContext, input: Record<string, unknown>): 
     added.push(`${ref.track}/${id} ${title}`)
   }
   const s = after(ctx, emit, ref.track, ref.id)
-  const state =
-    s?.status === 'awaiting' ? "awaiting the person's confirmation (checkpoint or reopened after failure)" : (s?.status ?? status)
+  const state = s?.status === 'awaiting' ? waiting(s) : (s?.status ?? status)
   const ups = added.length
     ? `\nFollow-ups set aside in the backlog for the person to schedule:\n${added.map(x => `- ${x}`).join('\n')}`
     : ''
@@ -240,7 +292,46 @@ export function doneAction(ctx: ActionContext, input: Record<string, unknown>): 
     emit,
     track: ref.track,
     focus: ref2,
-    toast: s?.status === 'done' ? `✓ ${ref2}` : s?.status === 'awaiting' ? `◆ ${ref2} awaits your confirmation` : undefined,
+    toast: s?.status === 'done' ? `✓ ${ref2}` : s?.status === 'awaiting' && !s.reviewPending ? `◆ ${ref2} awaits your confirmation` : s?.reviewPending ? `⚖ ${ref2} waits for a review` : undefined,
+  }
+}
+
+/** Record a review of a step's work, as the reviewer. Says whether it satisfies the step's policy. */
+export function reviewAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
+  const now = fold(ctx.events, [], ctx.now)
+  const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
+  const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+  if (!ref || !step) return unknownStep(ctx, input.step)
+  const verdict = input.verdict
+  if (verdict !== 'pass' && verdict !== 'findings' && verdict !== 'fail') {
+    return refused('verdict is pass, findings (passed with findings to follow up) or fail.')
+  }
+  const ev: RoadmapEvent = {
+    kind: 'review',
+    at: ctx.now,
+    session: ctx.session,
+    track: ref.track,
+    id: ref.id,
+    actor: ctx.actor,
+    verdict,
+    evidence: text(input.evidence),
+    note: text(input.note),
+  }
+  const ref2 = `${ref.track}/${ref.id}`
+  const s = after(ctx, [ev], ref.track, ref.id)
+  const counts = step.review?.required ? qualifies(step.review, step.implementer, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now }) : true
+  const why = !counts
+    ? step.review?.independence === 'cross-model'
+      ? ` It does not satisfy the policy: the reviewer (${family(ctx.actor)}) is the same model family as the implementer (${family(step.implementer?.actor)}). Ask another model to review.`
+      : ' It does not satisfy the policy: the reviewer is the session that implemented it.'
+    : ''
+  const state = s?.status === 'done' ? 'done' : s?.status === 'awaiting' ? `awaiting (${s.reviewPending ? 'review still owed' : 'the person confirms'})` : s?.status
+  return {
+    ok: true,
+    text: `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.`,
+    emit: [ev],
+    track: ref.track,
+    toast: counts ? `⚖ ${ref2} reviewed: ${verdict}` : undefined,
   }
 }
 
@@ -248,8 +339,21 @@ export function doneAction(ctx: ActionContext, input: Record<string, unknown>): 
 export function stepAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
   const board = fold(ctx.events, ctx.lives, ctx.now)
   const ref = parseRef(String(input.step ?? ''), board.tracks, ctx.track)
-  const said = ref && brief(board, ref.track, ref.id, ctx.session)
-  if (!ref || !said) return unknownStep(ctx, input.step)
+  const base = ref && brief(board, ref.track, ref.id, ctx.session)
+  if (!ref || !base) return unknownStep(ctx, input.step)
+  const step = board.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+  const lines = [base]
+  if (step?.review?.required) {
+    const impl = family(step.implementer?.actor ?? ctx.actor)
+    if (step.review.independence === 'cross-model' && impl === 'claude' && ctx.hints?.codexInstalled) {
+      lines.push(
+        `Codex is installed here: when the work is ready, have Codex review it (e.g. the codex-review skill of claudex-loop, ` +
+          `or \`codex exec\`), and have Codex itself record the verdict with: ` +
+          `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --verdict pass|findings|fail --evidence "…"`,
+      )
+    }
+  }
+  const said = lines.join('\n')
   return { ok: true, text: said, emit: [], track: ref.track, focus: ctx.focus ? undefined : `${ref.track}/${ref.id}` }
 }
 

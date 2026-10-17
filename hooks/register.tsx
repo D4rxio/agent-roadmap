@@ -20,7 +20,7 @@ import {
   nextPersonId,
   trackMarkdown,
 } from './model'
-import { doneAction, markAction, planAction, statusAction, stepAction } from './actions'
+import { doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
 import { drawBand, drawPane } from './view'
 import type { RoadmapView } from './view'
@@ -31,6 +31,7 @@ const TOOL_MARK = 'mcp__roadmap__mark'
 const TOOL_STATUS = 'mcp__roadmap__status'
 const TOOL_STEP = 'mcp__roadmap__step'
 const TOOL_DONE = 'mcp__roadmap__done'
+const TOOL_REVIEW = 'mcp__roadmap__review'
 const EMPTY: RoadmapBoard = { tracks: [], sessions: [], agents: [], at: 0 }
 
 const board = atom({ plugin: 'roadmap', key: 'board' } as const, EMPTY)
@@ -55,6 +56,8 @@ const journal = {
   activeAt: 0,
   /** Whether the engine draws styled content inside a Button: 2.1.295 on. Older ones take a plain label. */
   richButtons: false,
+  /** Whether Codex is installed beside Claude: a step that needs a cross-model review can use it. */
+  codexInstalled: false,
   isOpened: false,
   /** Every event read, by its name (a loose file's name, or the name it had before it was archived). */
   seen: new Set<string>(),
@@ -382,6 +385,7 @@ async function act($: EngineInterface, run: (ctx: ActionContext) => ActionResult
     actor: 'claude',
     track: journal.track,
     focus: journal.focus,
+    hints: { codexInstalled: journal.codexInstalled, cli: '~/.claude/mods/roadmap/cli/roadmap.mjs' },
   })
   if (!r.ok) return { result: r.text }
   for (const ev of r.emit) await emit($, ev)
@@ -406,6 +410,8 @@ export const register: Register = on => {
     journal.me = await $.session.id()
     const engine = await $.session.version().catch(() => undefined)
     journal.richButtons = !!engine && versionAtLeast(engine.base ?? engine.version, '2.1.295')
+    const which = await $.process.run(['which', 'codex']).catch(() => undefined)
+    journal.codexInstalled = which?.exitCode === 0 && !!which.stdout.trim()
     await update($, tzOffset, () => 0)
     void hostOffset($).then(min => update($, tzOffset, () => min)).catch(() => undefined)
     const band = await $.store.get('band').catch(() => undefined)
@@ -461,6 +467,17 @@ export const register: Register = on => {
                       why: { type: 'string', description: 'The problem this step solves, in a sentence.' },
                       scope: { type: 'string', description: 'Its boundaries: what is in, and what must not be touched.' },
                       done_when: { type: 'string', description: 'How to tell it is finished: concrete done criteria.' },
+                      review: {
+                        type: 'object',
+                        description:
+                          'How this step\'s work must be reviewed before it counts as done. Required on NEW steps unless the track sets a default.',
+                        properties: {
+                          required: { type: 'boolean' },
+                          independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+                          mode: { type: 'string', enum: ['standard', 'adversarial'] },
+                        },
+                        required: ['required'],
+                      },
                     },
                     required: ['id', 'title'],
                   },
@@ -469,8 +486,40 @@ export const register: Register = on => {
               required: ['name', 'steps'],
             },
           },
+          review: {
+            type: 'object',
+            description:
+              'The track\'s default review policy for its steps: { required, independence: any | other-session | ' +
+              'cross-model (a different model family from the implementer), mode: standard | adversarial }.',
+            properties: {
+              required: { type: 'boolean' },
+              independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+              mode: { type: 'string', enum: ['standard', 'adversarial'] },
+            },
+            required: ['required'],
+          },
         },
         required: ['track', 'phases'],
+      },
+    })
+    await $.tool.register({
+      name: 'review',
+      isDeferred: false,
+      description:
+        'Record a review of a roadmap step\'s work, as the reviewer: verdict pass, findings (passed, with ' +
+        'follow-ups) or fail, with evidence. A step whose policy requires a review stays out of done until a ' +
+        'review that meets its policy passes — for cross-model, the reviewer must be a different model family ' +
+        'from the implementer, so a Claude session cannot satisfy it for Claude\'s own work: have Codex (or ' +
+        'another model) review and record it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          step: { type: 'string' },
+          verdict: { type: 'string', enum: ['pass', 'findings', 'fail'] },
+          evidence: { type: 'string', description: 'What the review checked and found.' },
+          note: { type: 'string' },
+        },
+        required: ['step', 'verdict'],
       },
     })
     await $.tool.register({
@@ -591,7 +640,9 @@ export const register: Register = on => {
       'A roadmap shared by all Claude sessions on this machine is shown to the person in the Roadmap pane.\n' +
       summary(now) +
       '\nIf this task is one of these steps: read its brief first (roadmap step), mark it running when you ' +
-      'start, and close it with roadmap done (what shipped, evidence, follow-ups); put "#<track>/<id>" in each Agent description for that step. Checkpoints ' +
+      'start, and close it with roadmap done (what shipped, evidence, follow-ups). A step whose review policy ' +
+      'requires a review only counts as done after one that meets it (cross-model: another model family reviews ' +
+      'and records it with roadmap review). New steps you lay out need a review policy. Put "#<track>/<id>" in each Agent description for that step. Checkpoints ' +
       'are closed by the person, not by you. Open steps are listed most important first (P0 … P3); ' +
       'backlog steps are set aside — do not work on them unless asked. New work → add a step with roadmap plan (read roadmap status first).'
     return { ...ran, blocks: [...ran.blocks, { name: 'roadmap', text }] }
@@ -648,6 +699,7 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_DONE }, ($, e) => act($, ctx => doneAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_STEP }, ($, e) => act($, ctx => stepAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_STATUS }, $ => act($, ctx => statusAction(ctx)))
+  on('tool.call', { tool: TOOL_REVIEW }, ($, e) => act($, ctx => reviewAction(ctx, e as unknown as Record<string, unknown>)))
 
   // Live status: what this session and each of its agents is doing now.
   on('tool.call', async ($, e, next) => {

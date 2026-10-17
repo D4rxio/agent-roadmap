@@ -13,6 +13,8 @@
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--priority P0-P3|none] [--backlog true|false]
 //                                       status: todo running done failed blocked skipped (skipped needs --reason)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
+//   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …]
+//                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
 // Identity: --session / $ROADMAP_SESSION (default: one per actor, project and day), --actor /
 // $ROADMAP_ACTOR (default "codex"), --title / $ROADMAP_TITLE (default "<Actor> · <project>").
@@ -209,6 +211,12 @@ switch (command) {
           }),
         }),
       `roadmap done ${args[0] ?? ''}`,
+    )
+    break
+  case 'review':
+    act(
+      ctx => actions.reviewAction(ctx, { step: args[0], verdict: flags.verdict, evidence: flags.evidence, note: flags.note }),
+      `roadmap review ${args[0] ?? ''}`,
     )
     break
   default:

@@ -32,6 +32,8 @@ Any tool may read it, and append to it under the same rules, so other agents and
 {"kind":"edit","at":0,"session":"s","track":"api","id":"u1","removed":true,"origin":"person"}
 {"kind":"triage","at":0,"session":"s","track":"api","id":"2.1","priority":"P1","origin":"person"}
 {"kind":"triage","at":0,"session":"s","track":"docs","backlog":true,"origin":"person"}
+{"kind":"triage","at":0,"session":"s","track":"docs","archived":true,"origin":"person"}
+{"kind":"review","at":0,"session":"codex-1","track":"api","id":"2.1","actor":"codex","verdict":"pass","evidence":"no findings"}
 ```
 
 - `status`: `todo | running | done | failed | blocked | skipped`. `awaiting` is computed, never written.
@@ -39,6 +41,16 @@ Any tool may read it, and append to it under the same rules, so other agents and
   dependents. A worker's `skipped` is a proposal that awaits the person; the person's is final.
 - Plan steps may carry `why`, `scope` and `doneWhen` (the step's brief); a plan whose `blockedBy`
   closes a loop must not be written.
+- **Review policy.** A plan may carry `review` for the whole track, a step its own:
+  `{ "required": true, "independence": "any" | "other-session" | "cross-model", "mode": "standard" | "adversarial" }`.
+  `cross-model` means the reviewer is a different model family (the `actor` up to its first `-`) from the
+  implementer — the actor of the last worker `running`/`done` on the step. Steps new to a track must have a
+  policy (their own or the track's); `{ "required": false }` opts out on purpose.
+- A worker's `done` on a step whose policy requires a review stays `awaiting` until a `review` recorded
+  since the step last went `running` meets the policy with `pass` or `findings`; a qualifying `fail` keeps
+  it out. The person's own `done` is final. A review is written by the reviewer itself, under its own
+  `session` and `actor`.
+- `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.

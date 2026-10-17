@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { doneAction, markAction, planAction, stepAction } from '../hooks/actions'
+import { doneAction, markAction, planAction, reviewAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
@@ -177,6 +177,7 @@ test('the person confirms an awaiting checkpoint from the pane', async ($, on) =
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
   await $.tool.call({
     tool: 'mcp__roadmap__plan',
+    review: { required: false },
     track: 'release',
     title: 'Release',
     phases: [{ name: 'Release', steps: [{ id: '1', title: 'Activate in prod', checkpoint: true }] }],
@@ -613,6 +614,7 @@ test('roadmap plan refuses a loop; roadmap step reads the brief; roadmap done re
 
   const looped = await $.tool.call({
     tool: 'mcp__roadmap__plan',
+    review: { required: false },
     track: 'web',
     phases: [{ name: 'Build', steps: [{ id: '1', title: 'A', blocked_by: ['2'] }, { id: '2', title: 'B', blocked_by: ['1'] }] }],
   })
@@ -621,6 +623,7 @@ test('roadmap plan refuses a loop; roadmap step reads the brief; roadmap done re
 
   await $.tool.call({
     tool: 'mcp__roadmap__plan',
+    review: { required: false },
     track: 'web',
     phases: [
       {
@@ -655,6 +658,7 @@ test('roadmap plan refuses a loop; roadmap step reads the brief; roadmap done re
   // Follow-ups: in their own phase, in the backlog, with the proposed priority; a re-lay keeps them.
   await $.tool.call({
     tool: 'mcp__roadmap__plan',
+    review: { required: false },
     track: 'web',
     phases: [{ name: 'Build', steps: [{ id: '1', title: 'Login page' }, { id: '2', title: 'Ship', checkpoint: true }] }],
   })
@@ -1022,6 +1026,7 @@ test('the shared actions hold the rules once, for the Claude tools and the CLI a
   const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 5000, session: 's1', actor: 'codex', ...extra })
   const laid = planAction(ctx([]), {
     track: 'API',
+    review: { required: false },
     phases: [{ name: 'P', steps: [{ id: '1', title: 'A', done_when: 'tests green' }, { id: '2', title: 'B', blocked_by: ['1'] }] }],
   })
   expect(laid.ok).toBe(true)
@@ -1029,7 +1034,7 @@ test('the shared actions hold the rules once, for the Claude tools and the CLI a
   expect(laid.track).toBe('api')
   const events = laid.emit
 
-  const loop = planAction(ctx(events), { track: 'x', phases: [{ name: 'P', steps: [{ id: 'a', title: 'A', blocked_by: ['a'] }] }] })
+  const loop = planAction(ctx(events), { track: 'x', review: { required: false }, phases: [{ name: 'P', steps: [{ id: 'a', title: 'A', blocked_by: ['a'] }] }] })
   expect(loop.ok).toBe(false)
   expect(loop.emit.length).toBe(0)
 
@@ -1249,4 +1254,139 @@ test('from the pane: archive a finished track, find it under Archived, bring it 
     }
     await ui.unmount()
   }
+})
+
+test('review policy: a worker\'s done waits for a review that meets it; cross-model means another family', async () => {
+  const plan = {
+    kind: 'plan',
+    at: 1,
+    session: 's',
+    track: 'api',
+    review: { required: true, independence: 'cross-model', mode: 'adversarial' },
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence' }, { id: '2', title: 'Docs', review: { required: false } }] }],
+  } as RoadmapEvent
+  const work = (at: number, id: string, status: string, actor: string, session: string, origin = 'agent') =>
+    ({ kind: 'step', at, session, track: 'api', id, status, actor, origin }) as RoadmapEvent
+  const review = (at: number, actor: string, session: string, verdict: string) =>
+    ({ kind: 'review', at, session, track: 'api', id: '1', actor, verdict }) as RoadmapEvent
+  const get = (events: RoadmapEvent[], id = '1') => fold(events, [], 9999).tracks[0]?.steps.find(x => x.id === id)
+  const impl = [plan, work(2, '1', 'running', 'claude', 'c1'), work(3, '1', 'done', 'claude', 'c1')]
+
+  // Claude implemented and says done: it waits, a review is owed.
+  expect(get(impl)?.status).toBe('awaiting')
+  expect(get(impl)?.reviewPending).toBe(true)
+  expect(get(impl)?.reviewState).toBe('missing')
+  // Another Claude session's review does not count for cross-model …
+  expect(get([...impl, review(4, 'claude', 'c2', 'pass')])?.status).toBe('awaiting')
+  // … Codex's does: done.
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass')])?.status).toBe('done')
+  expect(get([...impl, review(4, 'codex', 'x1', 'findings')])?.status).toBe('done')
+  // A failed review keeps it out, and says so.
+  expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.reviewState).toBe('failed')
+  expect(get([...impl, review(4, 'codex', 'x1', 'fail')])?.status).toBe('awaiting')
+  // A new attempt (running again) needs a new review: the old one does not carry over.
+  expect(get([...impl, review(4, 'codex', 'x1', 'pass'), work(5, '1', 'running', 'claude', 'c1'), work(6, '1', 'done', 'claude', 'c1')])?.status).toBe('awaiting')
+  // The person's own done is final: an override.
+  expect(get([...impl, work(4, '1', 'done', 'person', 'p', 'person')])?.status).toBe('done')
+  // Symmetric: Codex implements, Claude reviews.
+  const byCodex = [plan, work(2, '1', 'running', 'codex', 'x1'), work(3, '1', 'done', 'codex', 'x1'), review(4, 'claude', 'c1', 'pass')]
+  expect(get(byCodex)?.status).toBe('done')
+  // A step that opts out is done as usual.
+  expect(get([plan, work(2, '2', 'done', 'claude', 'c1')], '2')?.status).toBe('done')
+  // other-session: the same family from another session counts; the implementing session does not.
+  const other = { ...plan, review: { required: true, independence: 'other-session' } } as RoadmapEvent
+  const implO = [other, work(2, '1', 'running', 'claude', 'c1'), work(3, '1', 'done', 'claude', 'c1')]
+  expect(get([...implO, review(4, 'claude', 'c1', 'pass')])?.status).toBe('awaiting')
+  expect(get([...implO, review(4, 'claude', 'c2', 'pass')])?.status).toBe('done')
+})
+
+test('new steps must carry a review policy; existing ones may go without; Codex is suggested when installed', async () => {
+  const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 5000, session: 's1', actor: 'claude', ...extra })
+  const none = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] })
+  expect(none.ok).toBe(false)
+  expect(none.text).toContain('new steps need a review policy (1)')
+  const bad = planAction(ctx([]), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A', review: { required: true, independence: 'whoever' } }] }] })
+  expect(bad.ok).toBe(false)
+  const first = planAction(ctx([]), {
+    track: 'api',
+    review: { required: true, independence: 'cross-model', mode: 'adversarial' },
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }],
+  })
+  expect(first.ok).toBe(true)
+  // Re-laid without a policy: the existing step is fine, and the track keeps its default for a new one.
+  const again = planAction(ctx(first.emit), { track: 'api', phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }, { id: '2', title: 'B' }] }] })
+  expect(again.ok).toBe(true)
+  const board = fold([...first.emit, ...again.emit], [], 5000)
+  expect(board.tracks[0]?.steps.find(x => x.id === '2')?.review?.independence).toBe('cross-model')
+
+  const events = [...first.emit, ...markAction(ctx(first.emit), { step: 'api/1', status: 'running' }).emit]
+  const hinted = stepAction(ctx(events, { hints: { codexInstalled: true, cli: 'roadmap' } }), { step: 'api/1' })
+  expect(hinted.text).toContain('cross-model review (adversarial) required')
+  expect(hinted.text).toContain('the reviewer must not be claude')
+  expect(hinted.text).toContain('Codex is installed here')
+  expect(hinted.text).toContain('roadmap review api/1 --verdict')
+  expect(stepAction(ctx(events), { step: 'api/1' }).text).not.toContain('Codex is installed')
+
+  // A Claude review of Claude's work is recorded, but says it does not count.
+  const own = reviewAction(ctx(events), { step: 'api/1', verdict: 'pass' })
+  expect(own.ok).toBe(true)
+  expect(own.text).toContain('does not satisfy the policy')
+  const codex = reviewAction(ctx(events, { actor: 'codex', session: 'x1' }), { step: 'api/1', verdict: 'pass', evidence: 'no findings' })
+  expect(codex.text).not.toContain('does not satisfy')
+  expect(reviewAction(ctx(events), { step: 'api/1', verdict: 'maybe' }).ok).toBe(false)
+})
+
+test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    review: { required: true, independence: 'cross-model' },
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence' }] }],
+  }
+  const events = [
+    plan,
+    { kind: 'step', at: 1100, session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1200, session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-eighteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /waits for a cross-model review \(not claude\)/ })).toBeDefined()
+    expect(await ui.find({ text: /Confirm without review/ })).toBeDefined()
+    await ui.press({ key: 'fold-api' })
+    expect(await ui.find({ text: /review owed/ })).toBeDefined()
+    await ui.press({ key: 'fold-api' })
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'ok-api-1' })
+  expect(await ui.find({ text: /Confirm without review/ })).toBe(undefined)
+  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  await ui.unmount()
 })

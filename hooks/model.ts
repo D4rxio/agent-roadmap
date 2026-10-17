@@ -1,4 +1,6 @@
 import type {
+  RoadmapReview,
+  RoadmapReviewPolicy,
   RoadmapPriority,
   RoadmapAgent,
   RoadmapOrigin,
@@ -85,7 +87,10 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     startedAt?: number
     origin: RoadmapOrigin
     by?: string
+    actor?: string
+    session?: string
   }
+  const reviews = new Map<string, RoadmapReview[]>()
   const words = new Map<string, Word[]>()
   const key = (track: string, id: string) => `${track}/${id}`
 
@@ -124,6 +129,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         why: t.why,
         scope: t.scope,
         doneWhen: t.doneWhen,
+        review: t.review,
+        reviews: [],
         agents: [],
         backlog: false,
       }))
@@ -136,6 +143,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         updatedAt: e.at,
         backlog: false,
         archived: false,
+        review: e.review ?? old?.review,
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
@@ -150,6 +158,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         reason: e.reason,
         origin,
         by: origin === 'person' ? 'you' : (s?.title ?? e.actor),
+        actor: e.actor ?? s?.actor,
+        session: e.session,
       })
       if (s && origin !== 'person') s.track = e.track
     } else if (e.kind === 'session') {
@@ -174,9 +184,12 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
           tools: 0,
         })
         if (e.track && e.step) {
-          say(e.track, e.step, { at: e.at, status: 'running', startedAt: e.at, origin: 'agent', by: e.description })
+          say(e.track, e.step, { at: e.at, status: 'running', startedAt: e.at, origin: 'agent', by: e.description, actor: 'claude', session: e.session })
         }
       }
+    } else if (e.kind === 'review') {
+      const k = key(e.track, e.id)
+      reviews.set(k, [...(reviews.get(k) ?? []), { actor: e.actor, session: e.session, verdict: e.verdict, at: e.at, evidence: e.evidence, note: e.note }])
     } else if (e.kind === 'agent-end') {
       const a = agents.get(e.agentId)
       if (a && a.status === 'running') {
@@ -194,7 +207,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     const last = Math.max(...peers.map(p => p.endedAt ?? 0))
     if (a.endedAt !== last) continue
     const failed = peers.some(p => p.status === 'failed')
-    say(a.track, a.step, { at: last, status: failed ? 'failed' : 'done', origin: 'agent', by: a.description })
+    say(a.track, a.step, { at: last, status: failed ? 'failed' : 'done', origin: 'agent', by: a.description, actor: 'claude', session: a.session })
   }
 
   layOverPersonEdits(tracks, sorted)
@@ -225,6 +238,25 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       }
       step.proposed = status === 'awaiting' ? proposed : undefined
       step.skipReason = skipReason
+      // Review: the policy in force, who implemented, which reviews count, and whether done may stand.
+      step.review = step.review ?? t.review
+      const work = said.filter(w => w.origin !== 'person' && (w.status === 'running' || w.status === 'done'))
+      const last = work[work.length - 1]
+      step.implementer = last?.actor || last?.session ? { actor: last.actor ?? 'unknown', session: last.session ?? '' } : undefined
+      const attempt = [...said].reverse().find(w => w.status === 'running')?.at ?? 0
+      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at >= attempt).sort((a, b) => a.at - b.at)
+      if (step.review?.required) {
+        const counted = step.reviews.filter(r => qualifies(step.review!, step.implementer, r))
+        const latestReview = counted[counted.length - 1]
+        step.reviewState = !latestReview ? 'missing' : latestReview.verdict === 'fail' ? 'failed' : 'satisfied'
+        // A worker's done waits for a qualifying review; the person's own done is final (an override).
+        const doneWord = [...said].reverse().find(w => w.status === 'done')
+        if (status === 'done' && doneWord && doneWord.origin !== 'person' && step.reviewState !== 'satisfied') {
+          status = 'awaiting'
+          step.proposed = 'done'
+        }
+        step.reviewPending = status === 'awaiting' && step.reviewState !== 'satisfied' && step.proposed === 'done'
+      }
       const latest = said[said.length - 1]
       if (!latest) continue
       step.status = status
@@ -373,6 +405,7 @@ function layOverPersonEdits(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEv
         blockedBy: [],
         agents: [],
         backlog: false,
+        reviews: [],
         addedBy: e.origin === 'person' ? 'you' : undefined,
       })
       titledAt.set(k, e.at)
@@ -435,6 +468,30 @@ function applyTriage(
       s.triagedBy = last?.by
     }
   }
+}
+
+/** The model family an actor belongs to: `claude`, `codex`, … (`claude-opus` and `claude` are one). */
+export function family(actor: string | undefined): string {
+  return (actor ?? 'unknown').toLowerCase().split(/[-:\s@/·]/)[0] || 'unknown'
+}
+
+/** Whether a review counts under a policy, given who implemented the step. */
+export function qualifies(
+  policy: RoadmapReviewPolicy,
+  implementer: { actor: string; session: string } | undefined,
+  review: RoadmapReview,
+): boolean {
+  if (!implementer) return true
+  if (policy.independence === 'cross-model') return family(review.actor) !== family(implementer.actor)
+  if (policy.independence === 'other-session') return review.session !== implementer.session
+  return true
+}
+
+/** One line naming a policy: "cross-model review (adversarial)". */
+export function policyText(policy: RoadmapReviewPolicy | undefined): string {
+  if (!policy?.required) return 'no review required'
+  const who = policy.independence === 'cross-model' ? 'cross-model' : policy.independence === 'other-session' ? 'independent' : 'any'
+  return `${who} review${policy.mode === 'adversarial' ? ' (adversarial)' : ''} required`
 }
 
 export const PRIORITIES: RoadmapPriority[] = ['P0', 'P1', 'P2', 'P3']
@@ -519,6 +576,20 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
     s.why ? `Why: ${s.why}` : 'Why: (not written — ask, or infer it from the track and say so)',
     s.scope ? `Scope: ${s.scope}` : '',
     s.doneWhen ? `Done when: ${s.doneWhen}` : 'Done when: (not written — agree it before you call it done)',
+    s.review?.required
+      ? `Review: ${policyText(s.review)}${s.implementer ? ` · implemented by ${family(s.implementer.actor)}` : ''}${
+          s.review.independence === 'cross-model' && s.implementer ? ` → the reviewer must not be ${family(s.implementer.actor)}` : ''
+        }. ${
+          s.reviewState === 'satisfied'
+            ? 'A qualifying review passed.'
+            : s.reviewState === 'failed'
+              ? 'The last qualifying review FAILED: fix the findings, then get it reviewed again.'
+              : 'No qualifying review yet: a worker\'s done waits for one.'
+        }`
+      : s.review
+        ? 'Review: not required for this step.'
+        : '',
+    ...s.reviews.map(r => `  review by ${r.actor}: ${r.verdict}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
     dependents.length ? `Unblocks:\n${dependents.map(x => `  ${x}`).join('\n')}` : '',
     s.evidence ? `Last evidence: ${s.evidence}` : '',
@@ -558,7 +629,11 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
             : s.stale
               ? ' (stale: running, but nobody has been on it for hours — take it over or ask)'
               : ''
-      lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${why}`)
+      const rv =
+        s.review?.required && s.reviewState !== 'satisfied'
+          ? ` [${policyText(s.review)}${s.review.independence === 'cross-model' && s.implementer ? `: reviewer ≠ ${family(s.implementer.actor)}` : ''}${s.reviewState === 'failed' ? '; last review failed' : ''}]`
+          : ''
+      lines.push(`    ${ICONS[s.status]} ${s.priority ? `${s.priority} ` : ''}${t.name}/${s.id} ${s.title}${s.checkpoint ? ' [checkpoint]' : ''}${s.addedBy ? ' [added by the person]' : ''}${rv}${why}`)
     }
     if (open.length > (opts.open ?? 6)) lines.push(`    … ${open.length - (opts.open ?? 6)} more open`)
     const skipped = t.steps.filter(s => s.status === 'skipped')
@@ -749,6 +824,9 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
       if (s.why) lines.push(`  - why: ${s.why}`)
       if (s.scope) lines.push(`  - scope: ${s.scope}`)
       if (s.doneWhen) lines.push(`  - done when: ${s.doneWhen}`)
+      if (s.review?.required) {
+        lines.push(`  - review: ${policyText(s.review)}${s.reviews.length ? `; ${s.reviews.map(r => `${r.actor} ${r.verdict}`).join(', ')}` : '; none yet'}`)
+      }
     }
     lines.push('')
   }

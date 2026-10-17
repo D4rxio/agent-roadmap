@@ -5,6 +5,18 @@ export type RoadmapPriority = 'P0' | 'P1' | 'P2' | 'P3'
 /** Who wrote an event: the person (pane buttons) or a worker (a Claude session, Codex, …). */
 export type RoadmapOrigin = 'person' | 'agent'
 
+/**
+ * How a step's work must be reviewed before it counts as done.
+ * `independence`: `any` reviewer; `other-session` — not the session that implemented it;
+ * `cross-model` — a different model family from the implementer's (Claude implements → e.g. Codex
+ * reviews, and the other way round). `mode` says what kind of review is asked for.
+ */
+export type RoadmapReviewPolicy = {
+  required: boolean
+  independence?: 'any' | 'other-session' | 'cross-model'
+  mode?: 'standard' | 'adversarial'
+}
+
 export type RoadmapPlanStep = {
   id: string
   title: string
@@ -18,6 +30,8 @@ export type RoadmapPlanStep = {
   scope?: string
   /** How to tell it is finished: the done criteria. */
   doneWhen?: string
+  /** How its work must be reviewed; absent, the track's default applies. */
+  review?: RoadmapReviewPolicy
 }
 
 /** One line of the shared journal: each is its own file, so sessions never overwrite each other. */
@@ -29,7 +43,21 @@ export type RoadmapEvent =
       track: string
       title?: string
       phases: { name: string; steps: RoadmapPlanStep[] }[]
+      /** The track's default review policy for its steps. */
+      review?: RoadmapReviewPolicy
       actor?: string
+    }
+  /** A review of a step's work, written by the reviewer (its own session and actor). */
+  | {
+      kind: 'review'
+      at: number
+      session: string
+      track: string
+      id: string
+      actor: string
+      verdict: 'pass' | 'findings' | 'fail'
+      evidence?: string
+      note?: string
     }
   | {
       kind: 'step'
@@ -134,6 +162,16 @@ export type RoadmapStep = {
   proposed?: 'done' | 'skipped'
   /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */
   stale?: boolean
+  /** The review policy in force (the step's, else its track's). */
+  review?: RoadmapReviewPolicy
+  /** Who implemented it: the last worker that started or finished it. */
+  implementer?: { actor: string; session: string }
+  /** Reviews recorded since the current attempt started, oldest first. */
+  reviews: RoadmapReview[]
+  /** `satisfied` once a qualifying review passed; `missing` while one is owed; `failed` after a qualifying fail. */
+  reviewState?: 'satisfied' | 'missing' | 'failed'
+  /** Awaiting because the review its policy requires is still missing (not because of a checkpoint). */
+  reviewPending?: boolean
   /** Why this step exists: the problem it solves. */
   why?: string
   /** Its boundaries: what is in, and what must not be touched. */
@@ -160,7 +198,11 @@ export type RoadmapTrack = {
   /** Archived by the person: hidden everywhere but the Backlog tab and history, restorable. */
   archived: boolean
   triagedBy?: string
+  /** The default review policy for the track's steps. */
+  review?: RoadmapReviewPolicy
 }
+
+export type RoadmapReview = { actor: string; session: string; verdict: 'pass' | 'findings' | 'fail'; at: number; evidence?: string; note?: string }
 
 export type RoadmapSession = {
   id: string

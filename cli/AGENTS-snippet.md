@@ -19,6 +19,11 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   To lay out or re-lay a track, write the plan as JSON and run `$R plan <track> plan.json` — give each
   step `why`, `scope` and `done_when`, mark sign-offs as `checkpoint`, dependencies as `blocked_by`.
   Re-laying keeps statuses and the person's own items; a plan with a dependency loop is refused.
+- **Reviewing**: when asked to review a step (often another model's work), check it against the step's
+  brief, then record the verdict yourself: `$R review <track>/<id> --verdict pass|findings|fail --evidence "what you checked"`.
+  A step with a cross-model policy counts as done only after a different model family reviews it.
+- **Laying out new steps**: every new step needs a review policy (on the step or as the track's default),
+  e.g. `"review": { "required": true, "independence": "cross-model", "mode": "adversarial" }`.
 - **Not doing a step**: `$R mark <track>/<id> skipped --reason "why"` proposes leaving it out (not
   blocked, not failed — it will not be done); the person confirms the skip.
 - **Priorities and backlog**: `$R mark <track>/<id> --priority P1` or `--backlog true`
