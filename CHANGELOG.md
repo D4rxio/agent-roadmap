@@ -3,6 +3,39 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-10-17
+
+### Added
+- **Review policy, enforced.** A step, or a whole track as a default, says how its work must be
+  reviewed: `{ required, independence: any | other-session | cross-model, mode: standard | adversarial }`.
+  Cross-model means a different model family from the implementer: Claude implements, Codex reviews, or
+  the other way round. The reviewer records its verdict itself with the new `roadmap review` tool (CLI:
+  `review`). A worker's done waits until a qualifying review passes; a failed review keeps it out, and
+  each new done needs a new review. New steps must declare a policy; existing ones may go without.
+  - **A cross-model pass is confirmed by you.** No process on one machine can prove which model wrote a
+    review, so a cross-model pass leaves the step in **Needs you** with the reviewer, verdict and evidence
+    beside **Confirm ✓**. `any` and `other-session` policies close on a pass by themselves.
+  - **A plan can raise a policy, never lower it.** A step keeps the strictest policy it was ever under —
+    its own or its track's — through re-laid plans, a step dropped and added back, and each part of the
+    policy separately. A half-written policy is read as the strict one.
+  - When Codex is installed beside Claude, a step's brief says how to have it review.
+- **Moved: hand a step's obligation to another step.** For work that now belongs to another step — not
+  done, not skipped: `mark <ref> moved --to <ref> --reason`. An agent proposes it; you confirm it with
+  **Confirm move**. The moved step leaves progress; its dependents wait on the step the obligation went to
+  (moves chain), and that step "also answers for" it — review policy included, so a move is no way around
+  a review. A move that no longer stands (its target gone, or a loop) shows why and cannot be confirmed.
+- **Archive a track.** A finished track offers **Archive** (any track does on hover). It leaves the list,
+  the band, the status line and the agents' summary; its history stays in Days, and the Backlog tab's
+  **Archived** section brings it back. Archiving is yours only: an agent's word on it is ignored.
+- **Abandoned work is flagged.** A step marked running that nobody has touched or held for two hours
+  shows as **◌ stale** in Needs you, with **Back to todo** and **Done ✓**; agents see it marked stale, so a
+  new session can take it over.
+
+### Changed
+- **Events of the same millisecond fold one way** for every reader (by kind, then by the order work goes,
+  then by content), so a board never depends on the order files were read in.
+- The summary says what a step waits for — its review, your confirmation, a proposed skip or move.
+
 ## [0.3.0] — 2026-10-16
 
 ### Added
@@ -75,6 +108,7 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
+[0.4.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.2.0
 [0.1.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.1.0

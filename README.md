@@ -11,22 +11,25 @@ Every Claude Code session reads the same state when it starts and writes back wh
 tick off their own steps; you see the whole picture in a side pane. You no longer have to piece together
 what happened across five chats, and a fresh session knows where things stand.
 
-<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, the person's own item, and the sessions and subagents working now"></p>
+<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, a step moved to another track, a cross-model review waiting for confirmation, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-- **Done ✓ and Copy on hover** — finish a step in one press; copy a track title or `#track/id title`.
-- **Collapsible phases** — phases with work left start open, finished ones start closed.
-- **Long lists scroll cleanly** — every row is one line, cut with "…" instead of wrapping.
-- **Works on older Claude Code** — the pane draws on engines before 2.1.295 too.
-- **One action core** — the Claude tools and the CLI run the same code, so they behave the same.
+- **Review policy** — a step can require a review, e.g. by a different model (Claude builds, Codex
+  reviews); its done waits for one, and a cross-model pass comes to you to confirm.
+- **Moved** — hand a step's obligation to another step (not done, not skipped); its dependents and its
+  review policy follow it.
+- **Archive a track** — hide a finished track; its history stays, and you can bring it back.
+- **Abandoned work is flagged** — a step left running with nobody on it shows as stale.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
 **What it is not:** a project manager. There are no accounts, assignees, sprints, estimates, comments or
 boards. It is a small shared state that agents and you both read and write — the plan, what is done,
-what is next, what waits on whom — kept as plain JSON files.
+what is next, what waits on whom — kept as plain JSON files. It aims to stay simple and readable: a
+helper for the work, not a tracker. Integrations with issue trackers belong in a separate plugin built
+on [the journal format](docs/journal-format.md).
 
 - **Shared across sessions.** Start a new chat for every task: each one reads the roadmap when it starts
   and writes back what it did. Parallel sessions never overwrite each other.
@@ -74,16 +77,35 @@ or let it read and update one as it works. The pane opens on its own in the desk
   - Click the `P·` chip to raise its priority: P3 → P2 → P1 → P0.
   - Hover a step for **Copy** (`#track/id title`, ready for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
     **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
-  - Hover a track header for **Copy** (its title) or **Backlog** (set the whole track aside).
+  - Hover a track header for **Copy** (its title), **Backlog** (set the whole track aside) or **Archive**
+    (hide it; a finished track offers it outright).
   - **+ Add an item** at the bottom of a track adds your own step, marked **✎ you**. Agents may refine
     it, but they never lose it.
   - **⧉ Copy as Markdown** copies one track.
 - **Days.** Steps done per day over the last two weeks, and what happened each day: done, started,
   sessions, agents.
-- **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**.
+- **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
+  **↺ Unarchive**.
 - **This chat.** The step this chat holds, first thing in its pane; every pane marks which chat holds which step.
-- **Needs you.** Checkpoints and proposed skips waiting for **Confirm / Reject**, and failed steps.
+- **Needs you.** Checkpoints, proposed skips and moves, and reviews to confirm, each waiting for
+  **Confirm / Reject**; failed steps; and steps left running with nobody on them (**◌ stale**).
 - **Working now.** Live sessions and subagents and what each one is doing this moment.
+
+### Review policy
+
+A plan can say how a step's work must be reviewed before it counts as done — on the step, or for the
+whole track:
+
+```json
+"review": { "required": true, "independence": "cross-model", "mode": "adversarial" }
+```
+
+`independence` is `any`, `other-session` (not the chat that did the work) or `cross-model` (a different
+model family: Claude builds, Codex reviews). New steps must say it; `{ "required": false }` opts out on
+purpose. Keep it for the steps where a second look pays off — the complicated or risky ones. A worker's
+done waits for a qualifying review, and each new done needs a new one. A plan can raise a policy but
+never lower it. Because no process on one machine can prove which model wrote a review, a cross-model
+pass comes to **Needs you** with the reviewer and the evidence, and your **Confirm ✓** closes it.
 
 ### Tools the model gets
 
@@ -93,6 +115,7 @@ or let it read and update one as it works. The pane opens on its own in the desk
 | `roadmap step` | read one step's brief before working on it |
 | `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
+| `roadmap review` | record a review of a step's work: pass, findings or fail, with evidence |
 | `roadmap status` | read every track's open steps and who is working on what |
 
 ## Other agents: the CLI
@@ -107,6 +130,8 @@ node cli/roadmap.mjs json                   # the whole board, for analysis
 node cli/roadmap.mjs plan api plan.json     # lay out a track from JSON
 node cli/roadmap.mjs mark api/2.1 running
 node cli/roadmap.mjs done api/2.1 --shipped "…" --evidence "…" --follow-up "title:P2"
+node cli/roadmap.mjs review api/2.1 --verdict pass --evidence "…"
+node cli/roadmap.mjs mark api/1 moved --to api/2 --reason "…"
 ```
 
 [`cli/AGENTS-snippet.md`](cli/AGENTS-snippet.md) is a ready-to-paste block for an agent's `AGENTS.md`.
