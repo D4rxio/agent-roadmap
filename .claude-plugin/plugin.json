@@ -1,6 +1,6 @@
 {
   "name": "roadmap",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Shared planning state for coding agents: one file-based roadmap that every Claude Code session reads and updates \u2014 plan, backlog, priorities, dependencies, progress \u2014 with a side pane and person-confirmed checkpoints.",
   "author": {
     "name": "D4rxio"
