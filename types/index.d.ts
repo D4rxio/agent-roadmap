@@ -1,4 +1,4 @@
-export type RoadmapStatus = 'todo' | 'running' | 'done' | 'failed' | 'blocked' | 'awaiting' | 'skipped'
+export type RoadmapStatus = 'todo' | 'running' | 'done' | 'failed' | 'blocked' | 'awaiting' | 'skipped' | 'moved'
 
 export type RoadmapPriority = 'P0' | 'P1' | 'P2' | 'P3'
 
@@ -75,8 +75,10 @@ export type RoadmapEvent =
       status: RoadmapStatus
       note?: string
       evidence?: string
-      /** Why a step is skipped: required with `skipped`. */
+      /** Why a step is skipped or moved: required with `skipped` and `moved`. */
       reason?: string
+      /** With `moved`: the step (`<track>/<id>`) its obligation now lives in. */
+      movedTo?: string
       origin?: RoadmapOrigin
       actor?: string
     }
@@ -166,7 +168,14 @@ export type RoadmapStep = {
   /** Why it was skipped (with `skipped`, or with `awaiting` when a worker proposes a skip). */
   skipReason?: string
   /** What an `awaiting` step waits for the person to confirm. */
-  proposed?: 'done' | 'skipped'
+  proposed?: 'done' | 'skipped' | 'moved'
+  /** With `moved` (or a proposed move): the step its obligation was handed to, and why. */
+  movedTo?: string
+  moveReason?: string
+  /** Where the obligation ends up after a chain of moves; absent when the chain is broken or loops. */
+  movedFinal?: string
+  /** Steps whose obligation was moved here (directly or through a chain): this step answers for them. */
+  carries?: string[]
   /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */
   stale?: boolean
   /** The review policy in force (the step's, else its track's). */

@@ -1506,6 +1506,83 @@ test('review policy, round four: an add cannot shed the floor, a half-said polic
   expect(summary(fold(reviewed, [], 99999))).toContain('reviewed by codex: findings — the person confirms')
 })
 
+test('moved: a step hands its obligation to another; the person confirms; dependents and review policy follow it', async () => {
+  const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 100, session: 's1', actor: 'claude', ...extra })
+  const cross = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const plan = {
+    kind: 'plan', at: 1, session: 's', track: 'api',
+    phases: [{ name: 'P', steps: [
+      { id: '1', title: 'Fence', review: cross },
+      { id: '2', title: 'Unified fence', review: { required: false } },
+      { id: '3', title: 'Uses the fence', blockedBy: ['1'], review: { required: false } },
+      { id: '4', title: 'Later', review: { required: false } },
+    ] }],
+  } as RoadmapEvent
+  const step = (at: number, id: string, status: string, origin = 'agent', extra: object = {}) =>
+    ({ kind: 'step', at, session: origin === 'person' ? 'p' : 'c1', track: 'api', id, status, actor: origin === 'person' ? 'person' : 'claude', origin, ...extra }) as RoadmapEvent
+  const moveBy = (at: number, id: string, to: string, origin = 'person') => step(at, id, 'moved', origin, { movedTo: to, reason: 'folded into the unified fence' })
+  const board = (events: RoadmapEvent[]) => fold(events, [], 9999)
+  const get = (events: RoadmapEvent[], id: string) => board(events).tracks[0]?.steps.find(x => x.id === id)
+
+  // The action: a move needs a target that exists, is not itself, does not loop back; and a reason.
+  expect(markAction(ctx([plan]), { step: 'api/1', status: 'moved', reason: 'r' }).ok).toBe(false)
+  expect(markAction(ctx([plan]), { step: 'api/1', status: 'moved', to: '2' }).ok).toBe(false)
+  expect(markAction(ctx([plan]), { step: 'api/1', status: 'moved', to: 'api/9', reason: 'r' }).ok).toBe(false)
+  expect(markAction(ctx([plan]), { step: 'api/1', status: 'moved', to: '1', reason: 'r' }).text).toContain('onto itself')
+  const loop = markAction(ctx([plan, moveBy(2, '1', 'api/2')]), { step: 'api/2', status: 'moved', to: 'api/1', reason: 'r' })
+  expect(loop.ok).toBe(false)
+  expect(loop.text).toContain('leads back')
+  // An agent's move is a proposal: it awaits the person, and dependents still wait on the step itself.
+  const proposed = markAction(ctx([plan]), { step: 'api/1', status: 'moved', to: '2', reason: 'folded into the unified fence' })
+  expect(proposed.ok).toBe(true)
+  expect(proposed.text).toContain('move to api/2 proposed')
+  const p1 = [plan, ...proposed.emit]
+  expect(get(p1, '1')?.status).toBe('awaiting')
+  expect(get(p1, '1')?.proposed).toBe('moved')
+  expect(get(p1, '1')?.movedTo).toBe('api/2')
+  expect(get(p1, '3')?.status).toBe('blocked')
+  expect(summary(board(p1))).toContain('a move to api/2 awaits the person')
+
+  // Confirmed: the step is moved, not done; its dependent now waits on the target, and is free once it is done.
+  const m = [...p1, moveBy(200, '1', 'api/2')]
+  expect(get(m, '1')?.status).toBe('moved')
+  expect(get(m, '1')?.movedFinal).toBe('api/2')
+  expect(get(m, '2')?.carries).toEqual(['api/1'])
+  expect(get(m, '3')?.status).toBe('blocked')
+  expect(get([...m, step(300, '2', 'done', 'person')], '3')?.status).toBe('todo')
+  // Progress sets the moved step aside: it is neither done nor still to do here.
+  expect(progress(board(m).tracks[0]!).total).toBe(3)
+  // Its review policy travels: the target, laid with no review, now needs a cross-model one.
+  expect(get(m, '2')?.review?.independence).toBe('cross-model')
+  const doneThere = [...m, step(300, '2', 'running'), step(301, '2', 'done')]
+  expect(get(doneThere, '2')?.status).toBe('awaiting')
+  expect(get(doneThere, '2')?.reviewPending).toBe(true)
+  expect(get(doneThere, '3')?.status).toBe('blocked')
+  // Briefs, the summary and Markdown say where the obligation went.
+  expect(brief(board(m), 'api', '1')).toContain('its obligation now lives in api/2')
+  expect(brief(board(m), 'api', '2')).toContain('Also answers for: api/1')
+  expect(brief(board(m), 'api', '3')).toContain('this waits on that step now')
+  expect(summary(board(m))).toContain('moved (obligation handed to another step): api/1 → api/2')
+  expect(trackMarkdown(board(m).tracks[0]!, 9999, 0)).toContain('[>] api/1 Fence — moved to api/2')
+
+  // A chain resolves to its end, which answers for every step moved along it.
+  const chain = [...m, moveBy(400, '2', 'api/4')]
+  expect(get(chain, '1')?.movedFinal).toBe('api/4')
+  expect(get(chain, '4')?.carries?.sort()).toEqual(['api/1', 'api/2'])
+  expect(get(chain, '4')?.review?.independence).toBe('cross-model')
+  // A chain that loops (written by hand) or whose end left the plan ends nowhere: dependents stay blocked.
+  const looped = [...m, moveBy(400, '2', 'api/1')]
+  expect(get(looped, '1')?.movedFinal).toBe(undefined)
+  expect(get(looped, '3')?.status).toBe('blocked')
+  // … until the person settles it: a done on step 2 ends 2's move, so 1's chain ends there again.
+  expect(get([...looped, step(500, '2', 'done', 'person')], '1')?.movedFinal).toBe('api/2')
+  expect(get([...looped, step(500, '2', 'done', 'person')], '3')?.status).toBe('todo')
+  // The person rejects a proposed move: back to work.
+  expect(get([...p1, step(200, '1', 'todo', 'person')], '1')?.status).toBe('todo')
+  // A `moved` without a target is no move at all.
+  expect(get([plan, step(2, '1', 'moved', 'person')], '1')?.status).toBe('todo')
+})
+
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {
   const plan = {
     kind: 'plan',
@@ -1615,5 +1692,55 @@ test('the pane shows a cross-model pass with its reviewer, for the person to con
   await ui.press({ key: 'ok-api-1' })
   expect(await ui.find({ text: /Confirm ✓/ })).toBe(undefined)
   expect(await ui.find({ text: /100%/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the pane offers a proposed move for the person to confirm, then shows where it went', async ($, on) => {
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence', review: { required: false } }, { id: '2', title: 'Unified fence', review: { required: false } }] }],
+  }
+  const events = [
+    plan,
+    { kind: 'step', at: 1100, session: 'c1', track: 'api', id: '1', status: 'moved', movedTo: 'api/2', reason: 'folded into the unified fence', actor: 'claude', origin: 'agent' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-eighteen' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ text: /proposes moving it to api\/2: folded into the unified fence/ })).toBeDefined()
+    expect(await ui.find({ text: /Confirm move/ })).toBeDefined()
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'ok-api-1' })
+  expect(await ui.find({ text: /Confirm move/ })).toBe(undefined)
+  expect([...files.values()].some(t => t.includes('"status":"moved"') && t.includes('"origin":"person"') && t.includes('"movedTo":"api/2"'))).toBe(true)
   await ui.unmount()
 })

@@ -371,6 +371,13 @@ async function personSkip($: EngineInterface, track: string, id: string, reason:
   $.ui.toast(`↷ ${track}/${id} skipped`)
 }
 
+/** The person confirms a worker's proposed move: the step's obligation now lives in `to`. */
+async function personMove($: EngineInterface, track: string, id: string, to: string, reason: string) {
+  if (!to.trim()) return
+  await emit($, { kind: 'step', at: Date.now(), session: journal.me, track, id, status: 'moved', movedTo: to.trim(), reason: reason.trim() || undefined, origin: 'person', actor: 'person' })
+  $.ui.toast(`↪ ${track}/${id} moved to ${to.trim()}`)
+}
+
 /**
  * The tools are thin: read the journal, run the shared action (actions.ts; the CLI runs the same),
  * append what it returns, and follow up in this chat (focus, track, toast).
@@ -536,7 +543,10 @@ export const register: Register = on => {
         '(P0 most urgent … P3, or "none") or `backlog` (true sets a step aside, false brings it back); the ' +
         'person\'s own choice of either always stands over yours. `step` "<track>/*" sets them for a whole ' +
         'track. Never work on a backlog step or track unless asked. Status "skipped" (with a short `reason`) ' +
-        'proposes leaving a step out — not blocked, not failed, just not going to be done; the person confirms it.',
+        'proposes leaving a step out — not blocked, not failed, just not going to be done; the person confirms it. ' +
+        'Status "moved" (with `to`, the step that now carries it, and a `reason`) proposes handing a step\'s obligation ' +
+        'to another step — the work still has to be done, there; its dependents then wait on that step, and its review ' +
+        'policy goes with it. The person confirms it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -544,7 +554,8 @@ export const register: Register = on => {
           status: { type: 'string', enum: STATUSES.filter(x => x !== 'awaiting') },
           priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3', 'none'] },
           backlog: { type: 'boolean' },
-          reason: { type: 'string', description: 'Required with status "skipped": why the step will not be done.' },
+          reason: { type: 'string', description: 'Required with status "skipped" (why it will not be done) or "moved" (why it moved).' },
+          to: { type: 'string', description: 'With status "moved": the step ("<track>/<id>", or "<id>" in the same track) that now carries the obligation.' },
           evidence: { type: 'string', description: 'What shows it: tests passed, commit, PR, measurement.' },
           note: { type: 'string', description: 'A few words: blocker, next step.' },
         },
@@ -787,6 +798,7 @@ export const register: Register = on => {
       focus: await read($, focus),
       onPin: ref => void setFocus($, ref),
       onSkip: (track, id, reason) => void personSkip($, track, id, reason),
+      onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
       onCycle: (track, id, status) => void personStatus($, track, id, status),
       onAdd: (track, title) => void personAdd($, track, title),
       onStartEdit: ref => void update($, editing, () => ref),

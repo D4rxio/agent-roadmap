@@ -10,8 +10,10 @@
 //   roadmap json                        the whole folded board as JSON, for analysis
 //   roadmap md [track]                  the roadmap (or one track) as Markdown
 //   roadmap plan <track> <file|->       lay out a track from JSON {title?, phases:[{name, steps:[…]}]}
-//   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--priority P0-P3|none] [--backlog true|false]
-//                                       status: todo running done failed blocked skipped (skipped needs --reason)
+//   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
+//                                       status: todo running done failed blocked skipped moved
+//                                       (skipped needs --reason; moved needs --to and --reason: the obligation
+//                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
 //   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …]
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
@@ -228,6 +230,7 @@ switch (command) {
           evidence: flags.evidence,
           note: flags.note,
           reason: flags.reason,
+          to: flags.to,
           priority: flags.priority,
           backlog: flags.backlog,
         }),

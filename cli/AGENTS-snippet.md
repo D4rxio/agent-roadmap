@@ -26,6 +26,9 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   `codex` from inside Codex whatever `--actor` says; a bare `--actor` never counts as cross-model.
 - **Laying out new steps**: every new step needs a review policy (on the step or as the track's default),
   e.g. `"review": { "required": true, "independence": "cross-model", "mode": "adversarial" }`.
+- **Moving a step's obligation**: when its work now belongs to another step, `$R mark <track>/<id> moved --to <track>/<id> --reason "why"`
+  proposes handing it over (not done, not skipped: the work is still owed, there). The person confirms;
+  then the other step answers for it, its dependents included, under the stricter review policy of the two.
 - **Not doing a step**: `$R mark <track>/<id> skipped --reason "why"` proposes leaving it out (not
   blocked, not failed — it will not be done); the person confirms the skip.
 - **Priorities and backlog**: `$R mark <track>/<id> --priority P1` or `--backlog true`

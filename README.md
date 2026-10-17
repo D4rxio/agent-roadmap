@@ -91,7 +91,7 @@ or let it read and update one as it works. The pane opens on its own in the desk
 |---|---|
 | `roadmap plan` | lay out or re-lay one track: phases, steps with `why` / `scope` / `done_when`, checkpoints, `blocked_by` (loops are refused) |
 | `roadmap step` | read one step's brief before working on it |
-| `roadmap mark` | report a status with evidence (`skipped` needs a reason); propose a priority or backlog (`<track>/*` for a whole track) |
+| `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
 | `roadmap status` | read every track's open steps and who is working on what |
 

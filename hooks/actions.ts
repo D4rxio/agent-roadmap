@@ -222,6 +222,20 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
   if (!ref || !now.tracks.find(t => t.name === ref.track)?.steps.some(s => s.id === ref.id)) return unknownStep(ctx, input.step)
   const ref2 = `${ref.track}/${ref.id}`
+  // A move hands the obligation to a step that exists, is not this one, and does not lead back here.
+  let movedTo: string | undefined
+  if (status === 'moved') {
+    if (!reason) return refused('A move needs a reason: why does this obligation now belong to another step? Pass `reason`.')
+    const target = parseRef(String(input.to ?? ''), now.tracks, ref.track)
+    if (!input.to || !target || !now.tracks.find(t => t.name === target.track)?.steps.some(x => x.id === target.id)) {
+      return refused(`A move needs \`to\`: the step that now carries this obligation ("<track>/<id>", or "<id>" in ${ref.track}), and it must exist.`)
+    }
+    movedTo = `${target.track}/${target.id}`
+    if (movedTo === ref2) return refused('A step cannot be moved onto itself.')
+    const confirmed: RoadmapEvent = { kind: 'step', at: ctx.now + 1, session: ctx.session, track: ref.track, id: ref.id, status: 'moved', movedTo, reason, origin: 'person' }
+    const would = fold([...ctx.events, confirmed], [], ctx.now).tracks.find(t => t.name === ref.track)?.steps.find(x => x.id === ref.id)
+    if (!would?.movedFinal) return refused(`Not moved: ${movedTo} leads back to ${ref2} through earlier moves, so the obligation would end nowhere.`)
+  }
   const emit: RoadmapEvent[] = []
   if (priority !== undefined || backlog !== undefined) {
     emit.push({ kind: 'triage', at: ctx.now, session: ctx.session, track: ref.track, id: ref.id, priority, backlog, origin: 'agent' })
@@ -246,6 +260,7 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     note: text(input.note),
     evidence: text(input.evidence),
     reason,
+    movedTo,
     origin: 'agent',
     actor: ctx.actor,
   })
@@ -253,6 +268,8 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
   const said =
     s?.status === 'awaiting' && s.proposed === 'skipped'
       ? `${ref2} → skip proposed; the person confirms or rejects it in the Roadmap pane.`
+      : s?.status === 'awaiting' && s.proposed === 'moved'
+        ? `${ref2} → move to ${movedTo} proposed; the person confirms or rejects it in the Roadmap pane. Once confirmed, ${movedTo} carries this obligation: its dependents wait on ${movedTo}, and its review policy applies there.`
       : s?.status === 'awaiting'
         ? `${ref2} → ${waiting(s)}.`
         : `${ref2} → ${s?.status ?? status}.`

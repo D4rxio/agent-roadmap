@@ -43,6 +43,8 @@ export type PaneData = {
   onPin: (ref: string) => void
   /** The person skips a step, with the reason they gave. */
   onSkip: (track: string, id: string, reason: string) => void
+  /** The person confirms a proposed move: the step's obligation goes to `to`, for `reason`. */
+  onMove: (track: string, id: string, to: string, reason: string) => void
   /** Whether this engine draws styled content inside a Button (2.1.295 on). */
   richButtons: boolean
 }
@@ -137,7 +139,7 @@ function Btn(els: Els, d: { richButtons: boolean }, props: Record<string, any>, 
 export function nextStatus(status: RoadmapStatus): RoadmapStatus {
   if (status === 'todo' || status === 'blocked' || status === 'failed') return 'running'
   if (status === 'running' || status === 'awaiting') return 'done'
-  // done and skipped both go back to todo: a skip is undone by the same click.
+  // done, skipped and moved all go back to todo: a skip or a move is undone by the same click.
   return 'todo'
 }
 
@@ -149,6 +151,7 @@ const COLOR: Record<RoadmapStatus, string> = {
   blocked: 'subtle',
   awaiting: 'permission',
   skipped: 'subtle',
+  moved: 'subtle',
 }
 
 // Mid-tone fills that read on both a light and a dark page.
@@ -160,6 +163,7 @@ const FILL: Record<RoadmapStatus, string> = {
   failed: '#e5534b',
   todo: 'rgba(128,128,128,0.22)',
   skipped: 'rgba(128,128,128,0.22)',
+  moved: 'rgba(128,128,128,0.22)',
 }
 
 const ORDER: RoadmapStatus[] = ['done', 'awaiting', 'running', 'blocked', 'failed', 'todo']
@@ -215,9 +219,11 @@ function stepRight(s: RoadmapStep, d: PaneData): string {
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'
   if (s.status === 'awaiting' && s.reviewPending) return s.reviewState === 'failed' ? 'review failed' : 'review owed'
   if (s.status === 'awaiting' && s.reviewState === 'reviewed') return 'reviewed · to confirm'
-  if (s.status === 'awaiting') return s.proposed === 'skipped' ? 'skip to confirm' : 'to confirm'
+  if (s.status === 'awaiting') return s.proposed === 'skipped' ? 'skip to confirm' : s.proposed === 'moved' ? `move to ${s.movedTo ?? '?'} to confirm` : 'to confirm'
   if (s.status === 'skipped') return `skipped: ${s.skipReason ?? 'no reason'}`
+  if (s.status === 'moved') return s.movedFinal ? `moved to ${s.movedFinal}` : `moved to ${s.movedTo ?? '?'} (chain broken)`
   if (s.status === 'failed') return s.endedAt ? `failed ${when(s.endedAt, d.now, d.tz)}` : 'failed'
+  if (s.carries?.length) return `also answers for ${s.carries.join(', ')}`
   return ''
 }
 
@@ -332,6 +338,8 @@ function needsYou(els: Els, d: PaneData) {
             <Text dimColor wrap="truncate-end">{`   waits for ${st.review?.independence === 'cross-model' ? `a cross-model review (not ${family(st.implementer?.actor)})` : 'an independent review'}${st.reviewState === 'failed' ? ' — the last one failed' : ''}`}</Text>
           ) : st.reviewState === 'reviewed' && st.passedReview ? (
             <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
+          ) : st.proposed === 'moved' ? (
+            <Text dimColor wrap="truncate-end">{`   proposes moving it to ${st.movedTo ?? '?'}: ${st.moveReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.proposed === 'skipped' ? (
             <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.evidence || st.lastBy ? (
@@ -345,14 +353,16 @@ function needsYou(els: Els, d: PaneData) {
               onPress={() =>
                 st.proposed === 'skipped'
                   ? d.onSkip(st.track, st.id, st.skipReason ?? '')
-                  : d.onDecide(st.track, st.id, 'done')
+                  : st.proposed === 'moved'
+                    ? d.onMove(st.track, st.id, st.movedTo ?? '', st.moveReason ?? '')
+                    : d.onDecide(st.track, st.id, 'done')
               }
             >
-              {st.proposed === 'skipped' ? 'Confirm skip' : st.reviewPending ? 'Confirm without review' : 'Confirm ✓'}
+              {st.proposed === 'skipped' ? 'Confirm skip' : st.proposed === 'moved' ? 'Confirm move' : st.reviewPending ? 'Confirm without review' : 'Confirm ✓'}
             </Button>
             <Button
               key={`no-${st.track}-${st.id}`}
-              onPress={() => d.onDecide(st.track, st.id, st.proposed === 'skipped' ? 'todo' : 'failed')}
+              onPress={() => d.onDecide(st.track, st.id, st.proposed === 'skipped' || st.proposed === 'moved' ? 'todo' : 'failed')}
             >
               Reject
             </Button>
@@ -420,7 +430,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
           if (own.length === 0) return null
           // A phase with work left, or holding this chat's step, starts open; a finished one starts
           // closed. A hand toggle in this chat wins over the default.
-          const finished = own.every(s => s.status === 'done' || s.status === 'skipped')
+          const finished = own.every(s => s.status === 'done' || s.status === 'skipped' || s.status === 'moved')
           const holds = own.some(s => d.focus === `${t.name}/${s.id}`)
           const pkey = `${t.name}::${p.name}`
           const open = d.phaseOpen[pkey] ?? (!finished || holds)
@@ -526,7 +536,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       {Btn(els, d, { key: `cycle-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, nextStatus(s.status)) }, ICONS[s.status], <Text><Text color={COLOR[s.status]}>{ICONS[s.status]}</Text></Text>)}
       {prioChip(els, d, t, s)}
       {Line(els, `title-${ref}`, [
-        { text: `${s.id}  ${s.title}`, main: true, dim: s.status === 'done' || s.status === 'skipped' || s.backlog, strike: s.status === 'skipped' },
+        { text: `${s.id}  ${s.title}`, main: true, dim: s.status === 'done' || s.status === 'skipped' || s.status === 'moved' || s.backlog, strike: s.status === 'skipped' },
         ...(s.review?.required
           ? [
               s.reviewState === 'satisfied' || (s.reviewState === 'reviewed' && s.status === 'done')
@@ -565,7 +575,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
         display={d.canDraw ? 'none' : 'flex'}
         hover={d.canDraw ? { display: 'flex' } : undefined}
       >
-        {s.status !== 'done' && s.status !== 'skipped' ? (
+        {s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved' ? (
           // The person's own word: it also closes a checkpoint or a step awaiting confirmation.
           Btn(els, d, { key: `done-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, 'done') }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
         ) : null}
@@ -579,7 +589,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
         {d.focus !== ref ? (
           Btn(els, d, { key: `pin-${ref}`, plain: true, onPress: () => d.onPin(ref) }, "Pin", <Text><Text dimColor>Pin</Text></Text>)
         ) : null}
-        {s.status !== 'skipped' && s.status !== 'done' && els.Input ? (
+        {s.status !== 'skipped' && s.status !== 'done' && s.status !== 'moved' && els.Input ? (
           Btn(els, d, { key: `skipit-${ref}`, plain: true, onPress: () => d.onStartEdit(`skip:${ref}`) }, "Skip", <Text><Text dimColor>Skip</Text></Text>)
         ) : null}
         {!s.backlog ? (
@@ -637,6 +647,7 @@ const KIND: Record<string, { icon: string; color: string }> = {
   failed: { icon: '✗', color: 'error' },
   awaiting: { icon: '◆', color: 'permission' },
   skipped: { icon: '↷', color: 'subtle' },
+  moved: { icon: '↪', color: 'subtle' },
   started: { icon: '◐', color: 'warning' },
   session: { icon: '●', color: 'subtle' },
   agent: { icon: '◇', color: 'subtle' },

@@ -11,7 +11,7 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - The board (tracks, steps, sessions, agents) is computed from all events sorted by `at`. The order in
   which files arrive does not matter, and a duplicate changes nothing. Events of the same millisecond are
   ordered by kind (`session`, `plan`, `add`, `edit`, `agent`, `agent-end`, `step`, `triage`, `review`),
-  step reports in the order work goes (`todo`, `running`, `blocked`, `failed`, `skipped`, `done`), then
+  step reports in the order work goes (`todo`, `running`, `blocked`, `failed`, `skipped`, `moved`, `done`), then
   by their JSON text — every reader folds them the same way.
 - **A worker reports, the person closes.** A worker's `done` on a `checkpoint` step, or on a step that last
   `failed`, becomes `awaiting` until an event with `"origin": "person"` confirms it.
@@ -39,9 +39,16 @@ Any tool may read it, and append to it under the same rules, so other agents and
 {"kind":"review","at":0,"session":"codex-1","track":"api","id":"2.1","actor":"codex","verdict":"pass","evidence":"no findings"}
 ```
 
-- `status`: `todo | running | done | failed | blocked | skipped`. `awaiting` is computed, never written.
+- `status`: `todo | running | done | failed | blocked | skipped | moved`. `awaiting` is computed, never written.
   `skipped` needs a `reason`: the step will not be done. It leaves progress and stops blocking its
   dependents. A worker's `skipped` is a proposal that awaits the person; the person's is final.
+- `moved` needs `movedTo` (`<track>/<id>`) and a `reason`: the step's obligation is not dropped but handed
+  to another step, where it still has to be done. A worker's `moved` is a proposal that awaits the person;
+  the person's is final. A moved step leaves progress; its dependents wait on where the obligation ends up
+  (moves chain: `a → b → c` ends at `c`) and are free once that step is done or skipped. A chain that loops
+  or ends at a step that no longer exists ends nowhere, so its dependents stay blocked. The end of a chain
+  answers for every step moved along it, review policy included: it is held to the strictest policy among
+  them, so moving work is no way around its review. A `moved` without `movedTo` is ignored.
 - Plan steps may carry `why`, `scope` and `doneWhen` (the step's brief); a plan whose `blockedBy`
   closes a loop must not be written.
 - **Review policy.** A plan may carry `review` for the whole track, a step its own:
