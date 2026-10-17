@@ -23,10 +23,12 @@ import {
 } from './model'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
-import { drawBand, drawPane } from './view'
+import { drawBand, drawChainsPane, drawPane } from './view'
+import type { PaneData } from './view'
 import type { RoadmapView } from './view'
 
 const PANE = 'roadmap'
+const CHAINS = 'roadmap-chains'
 const TOOL_PLAN = 'mcp__roadmap__plan'
 const TOOL_MARK = 'mcp__roadmap__mark'
 const TOOL_STATUS = 'mcp__roadmap__status'
@@ -48,6 +50,7 @@ const outdated = atom({ plugin: 'roadmap', key: 'outdated' } as const, false)
 /** Which project the pane shows: '' this chat's own, '*' every project, or a project's key. */
 const projectView = atom({ plugin: 'roadmap', key: 'project' } as const, '')
 const chainTrack = atom({ plugin: 'roadmap', key: 'chainTrack' } as const, '')
+const chainDone = atom({ plugin: 'roadmap', key: 'chainDone' } as const, false)
 
 /**
  * The project a folder belongs to: its main repository's folder, found through git's common dir so every
@@ -132,6 +135,14 @@ async function readChainTrack($: EngineInterface): Promise<string> {
     return (await read($, chainTrack)) ?? ''
   } catch {
     return ''
+  }
+}
+
+async function readChainDone($: EngineInterface): Promise<boolean> {
+  try {
+    return (await read($, chainDone)) === true
+  } catch {
+    return false
   }
 }
 
@@ -411,6 +422,90 @@ async function endAgent($: EngineInterface, agentId: string, status: RoadmapStat
 }
 
 /** The person's own word on a step, from a pane button: the one origin that closes a checkpoint. */
+/** Everything a pane of this plugin draws from: the main pane, and the wide Chains pane. */
+async function paneData($: EngineInterface, e: any): Promise<PaneData> {
+  const tz = await read($, tzOffset)
+  // The pane shows one project: this chat's own unless the person picked another, or All.
+  const picked = await readProjectView($)
+  const shown = picked || journal.project || '*'
+  return {
+    board: forProject(await read($, board), shown),
+    whole: await read($, board),
+    chainTrack: await readChainTrack($),
+    chatTrack: journal.track,
+    onChainTrack: (t: string) => void update($, chainTrack, () => t).catch(() => undefined),
+    chainDone: await readChainDone($),
+    onChainDone: (show: boolean) => void update($, chainDone, () => show).catch(() => undefined),
+    project: shown,
+    here: journal.project,
+    onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),
+    onPlace: (track: string, p: string | null) => void personPlace($, track, p),
+    outdated: await readOutdated($),
+    richButtons: journal.richButtons,
+    view: (await read($, view)) as RoadmapView,
+    expanded: await read($, expanded),
+    now: Date.now(),
+    tz,
+    me: journal.me,
+    cols: Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 60),
+    canDraw: e.surface !== 'terminal',
+    onView: next => void update($, view, () => next),
+    onToggle: track =>
+      void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
+    phaseOpen: await readPhaseOpen($),
+    onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })).catch(() => undefined),
+    onCopyTrack: (track, surface) =>
+      void (async () => {
+        const t = (await read($, board)).tracks.find(x => x.name === track)
+        if (!t) return
+        const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz, await read($, board)), surface: surface as never })
+        $.ui.toast(done.isCopied ? `⧉ ${t.title} copied` : `Could not copy: ${done.reason}`)
+      })(),
+    onCopyAll: surface =>
+      void (async () => {
+        const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
+        $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
+      })(),
+    onCopyText: (text, surface) =>
+      void (async () => {
+        const done = await $.ui.copy({ text, surface: surface as never })
+        $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
+      })(),
+    onDecide: (track, id, status) => void decide($, track, id, status),
+    editing: await readEditing($),
+    focus: await readFocus($),
+    onPin: ref => void setFocus($, ref),
+    onSkip: (track, id, reason) => void personSkip($, track, id, reason),
+    onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
+    onCycle: (track, id, status) => void personStatus($, track, id, status),
+    onAdd: (track, title) => void personAdd($, track, title),
+    onStartEdit: ref => void update($, editing, () => ref).catch(() => undefined),
+    onRename: (track, id, title) => void personEdit($, track, id, { title }),
+    onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
+    onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
+    onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
+    onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
+    onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
+    onArchive: (track, archived) => void personArchive($, track, archived),
+    onWide: () => void openChains($),
+  }
+}
+
+function cannotDraw(els: any, err: unknown) {
+  const { Box, Text } = els
+  return (
+    <Box flexDirection="column">
+      <Text color="warning" wrap="wrap">{`The roadmap could not draw this pane: ${err instanceof Error ? err.message : String(err)}`}</Text>
+      <Text dimColor wrap="wrap">Restart this chat to load the plugin cleanly; other chats are not affected.</Text>
+    </Box>
+  )
+}
+
+/** Opens the Chains diagram in a pane of its own, as wide as the dock allows; Escape closes it. */
+async function openChains($: EngineInterface) {
+  await $.ui.open({ id: CHAINS, title: 'Chains', focus: true, closeOnEscape: true, columns: 200, rows: 40 })
+}
+
 async function openPane($: EngineInterface) {
   await update($, paneOpen, () => true)
   await $.ui.open({ id: PANE, title: 'Roadmap' })
@@ -901,76 +996,19 @@ export const register: Register = on => {
     const els = $.ui.resolve(e)
     // A pane that cannot draw says why instead of staying blank (e.g. code reloaded in a running chat).
     try {
-      const tz = await read($, tzOffset)
-      // The pane shows one project: this chat's own unless the person picked another, or All.
-      const picked = await readProjectView($)
-      const shown = picked || journal.project || '*'
-      return drawPane(els, {
-        board: forProject(await read($, board), shown),
-        whole: await read($, board),
-        chainTrack: await readChainTrack($),
-        chatTrack: journal.track,
-        onChainTrack: (t: string) => void update($, chainTrack, () => t).catch(() => undefined),
-        project: shown,
-        here: journal.project,
-        onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),
-        onPlace: (track: string, p: string | null) => void personPlace($, track, p),
-        outdated: await readOutdated($),
-        richButtons: journal.richButtons,
-        view: (await read($, view)) as RoadmapView,
-        expanded: await read($, expanded),
-        now: Date.now(),
-        tz,
-        me: journal.me,
-        cols: Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 60),
-        canDraw: e.surface !== 'terminal',
-        onView: next => void update($, view, () => next),
-        onToggle: track =>
-          void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
-        phaseOpen: await readPhaseOpen($),
-        onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })).catch(() => undefined),
-        onCopyTrack: (track, surface) =>
-          void (async () => {
-            const t = (await read($, board)).tracks.find(x => x.name === track)
-            if (!t) return
-            const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz, await read($, board)), surface: surface as never })
-            $.ui.toast(done.isCopied ? `⧉ ${t.title} copied` : `Could not copy: ${done.reason}`)
-          })(),
-        onCopyAll: surface =>
-          void (async () => {
-            const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
-            $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
-          })(),
-        onCopyText: (text, surface) =>
-          void (async () => {
-            const done = await $.ui.copy({ text, surface: surface as never })
-            $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
-          })(),
-        onDecide: (track, id, status) => void decide($, track, id, status),
-        editing: await readEditing($),
-        focus: await readFocus($),
-        onPin: ref => void setFocus($, ref),
-        onSkip: (track, id, reason) => void personSkip($, track, id, reason),
-        onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
-        onCycle: (track, id, status) => void personStatus($, track, id, status),
-        onAdd: (track, title) => void personAdd($, track, title),
-        onStartEdit: ref => void update($, editing, () => ref).catch(() => undefined),
-        onRename: (track, id, title) => void personEdit($, track, id, { title }),
-        onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
-        onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
-        onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
-        onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
-        onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
-        onArchive: (track, archived) => void personArchive($, track, archived),
-      })
+      return drawPane(els, await paneData($, e))
     } catch (err) {
-      const { Box, Text } = els
-      return (
-        <Box flexDirection="column">
-          <Text color="warning" wrap="wrap">{`The roadmap could not draw this pane: ${err instanceof Error ? err.message : String(err)}`}</Text>
-          <Text dimColor wrap="wrap">Restart this chat to load the plugin cleanly; other chats are not affected.</Text>
-        </Box>
-      )
+      return cannotDraw(els, err)
+    }
+  })
+
+  // The Chains diagram alone, in a pane of its own that can open wide (⤢ Wide in the Chains tab).
+  on('ui.render', { component: 'Pane', requestId: CHAINS }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    try {
+      return drawChainsPane(els, { ...(await paneData($, e)), wide: true })
+    } catch (err) {
+      return cannotDraw(els, err)
     }
   })
 

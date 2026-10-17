@@ -16,6 +16,13 @@ export type PaneData = {
   chainTrack?: string
   /** The track this chat last worked in. */
   chatTrack?: string
+  /** Whether the Chains tab shows the finished steps it would fold away. */
+  chainDone?: boolean
+  onChainDone?: (show: boolean) => void
+  /** Opens the Chains diagram in a wide pane of its own. */
+  onWide?: () => void
+  /** This is that wide pane. */
+  wide?: boolean
   onChainTrack?: (track: string) => void
   /** The project shown: a key, or '*' for every project. */
   project?: string
@@ -267,8 +274,10 @@ export function chainSvg(g: ChainGraph, opts: { maxAcross?: number } = {}): { sv
     const [fill, stroke] = NODE_FILL[n.status]
     const faded = n.status === 'skipped' || n.status === 'moved' || n.foreign ? ' opacity="0.7"' : ''
     const head = `${ICONS[n.status]} ${n.ref}${n.external ? ` · ${n.external}` : ''}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
+    // The whole title (the box cuts it) and the status, shown on hover.
+    const tip = `<title>${esc(`${n.ref} — ${n.title} (${n.status}${n.checkpoint ? ', checkpoint' : ''}${n.external ? `, project ${n.external}` : ''})`)}</title>`
     return (
-      `<g${faded}><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
+      `<g${faded}>${tip}<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
       `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"${n.foreign ? ' stroke-dasharray="3 2"' : ''}/>` +
       `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(cut(head, fits + 6))}</text>` +
       `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, fits))}</text></g>`
@@ -294,7 +303,8 @@ function chainsView(els: Els, d: PaneData) {
   const tracks = chainTracks(d)
   // This chat's track first: the one it holds a step in, else the one it last worked in.
   const track = [d.chainTrack, d.focus?.split('/')[0], d.chatTrack].find(t => t && tracks.includes(t)) ?? tracks[0]
-  const g = track ? chainGraph(d.whole ?? d.board, d.project, { track }) : chainGraph(d.board, d.project)
+  const g = track ? chainGraph(d.whole ?? d.board, d.project, { track, done: d.chainDone }) : chainGraph(d.board, d.project)
+  const folded = track ? (chainGraph(d.whole ?? d.board, d.project, { track }).hidden ?? 0) : 0
   const mermaid = mermaidOf(g)
   const title = (name: string) => d.board.tracks.find(t => t.name === name)?.title ?? name
   return (
@@ -313,6 +323,9 @@ function chainsView(els: Els, d: PaneData) {
           {track ? title(track) : 'Chains'}
         </Text>
         <Box flexGrow={1} />
+        {d.onWide && !d.wide && d.canDraw
+          ? Btn(els, d, { key: 'chain-wide', plain: true, onPress: () => d.onWide?.() }, '⤢ Wide', <Text><Text color="suggestion">⤢ Wide</Text></Text>)
+          : null}
         {Btn(
           els,
           d,
@@ -321,10 +334,25 @@ function chainsView(els: Els, d: PaneData) {
           <Text><Text color="suggestion">⧉ Copy as Mermaid</Text></Text>,
         )}
       </Box>
-      <Text dimColor wrap="truncate-end">
-        {`▸ next · ★ longest open chain · dashed: moved or another track${g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
-      </Text>
-      {g.nodes.length === 0 ? (
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor wrap="truncate-end">
+          {`▸ next · ★ longest open chain · dashed: moved or another track${!d.chainDone && g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
+        </Text>
+        <Box flexGrow={1} />
+        {folded
+          ? Btn(
+              els,
+              d,
+              { key: 'chain-done', plain: true, onPress: () => d.onChainDone?.(!d.chainDone) },
+              d.chainDone ? 'Hide done' : 'Show done',
+              <Text><Text color="suggestion">{d.chainDone ? 'Hide done' : 'Show done'}</Text></Text>,
+            )
+          : null}
+      </Box>
+      {g.nodes.length === 0 && folded ? (
+        // Everything in this track's chains is finished: say so, rather than that nothing waits on anything.
+        <Text dimColor>{`Every step in this track's chains is done (${folded}). Show done draws them.`}</Text>
+      ) : g.nodes.length === 0 ? (
         <Text dimColor>No step waits on another yet. Plans give steps blocked_by; moves show here too.</Text>
       ) : d.canDraw && Svg ? (
         (() => {
@@ -332,7 +360,8 @@ function chainsView(els: Els, d: PaneData) {
           const px = Math.max(20, d.cols) * 8
           const drawn = chainSvg(g, { maxAcross: Math.max(1, Math.floor((px + 14) / 244)) })
           const fit = Math.min(1, px / drawn.width)
-          return <Svg key="chain-graph" source={drawn.svg} alt={`the chains of ${track ?? 'the roadmap'}`} height={Math.max(40, Math.round(drawn.height * fit))} />
+          // Interactive (a script-less frame): hovering a box shows its whole title.
+          return <Svg key="chain-graph" source={drawn.svg} alt={`the chains of ${track ?? 'the roadmap'}`} height={Math.max(40, Math.round(drawn.height * fit))} isInteractive />
         })()
       ) : (
         chainText(g).map((line, i) => (
@@ -341,6 +370,17 @@ function chainsView(els: Els, d: PaneData) {
           </Text>
         ))
       )}
+    </Box>
+  )
+}
+
+/** The wide Chains pane: the diagram alone, with its track picker, as wide as the dock opens. */
+export function drawChainsPane(els: Els, d: PaneData) {
+  const { Box, Text } = els
+  return (
+    <Box flexDirection="column">
+      <Text dimColor wrap="truncate-end">Esc closes this pane.</Text>
+      {chainsView(els, d)}
     </Box>
   )
 }

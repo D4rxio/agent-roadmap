@@ -333,6 +333,8 @@ declare module 'claude-code' {
       project: string
       /** The track the Chains tab shows in this chat ('' : this chat's own). */
       chainTrack: string
+      /** Whether the Chains tab shows the finished steps it would otherwise fold away. */
+      chainDone: boolean
     }
   }
 }

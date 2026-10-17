@@ -922,7 +922,7 @@ export type ChainGraph = {
  * where its obligation went. Columns follow the longest path of prerequisites, so a chain reads left to
  * right; the longest chain of open steps is marked. Sets aside backlog and archived tracks. No time axis.
  */
-export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?: string } = {}): ChainGraph {
+export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?: string; done?: boolean } = {}): ChainGraph {
   // `board` is the whole board, so a chain crossing into another project keeps its arrows; `project` keeps
   // the chains that touch that project's (or unplaced) steps and marks the steps of other projects.
   const scope = project && project !== '*' ? project : undefined
@@ -976,7 +976,7 @@ export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?
     }
     const touches = (ref: string) => edges.some(e => (e.from === ref && live(e.to)) || (e.to === ref && live(e.from)))
     const own = new Set(edges.flatMap(e => [e.from, e.to]).filter(mine))
-    const kept = new Set([...own].filter(ref => live(ref) || touches(ref)))
+    const kept = new Set([...own].filter(ref => opts.done || live(ref) || touches(ref)))
     hidden = own.size - kept.size
     const near = edges.filter(e => (kept.has(e.from) && !mine(e.to)) || (kept.has(e.to) && !mine(e.from))).flatMap(e => [e.from, e.to])
     for (const ref of near) kept.add(ref)

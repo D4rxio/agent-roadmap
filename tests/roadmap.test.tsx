@@ -2334,6 +2334,11 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
     copied.push((e as { text: string }).text)
     return { value: { isCopied: true } }
   })
+  const opened: any[] = []
+  on('ui.open', (_$, e) => {
+    opened.push(e)
+    return { value: { isPlaced: true } }
+  })
   on('session.start', (_$, e) => e)
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
   // A second track with a chain: the tab offers both, one at a time, starting with this chat's.
@@ -2353,9 +2358,29 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
     }
     await ui.press({ key: 'copy-mermaid' })
     expect(copied.pop()).toContain('s_api_2f_1 ==> s_api_2f_2')
+    if (surface === 'desktop') {
+      // ⤢ Wide opens the diagram alone in a wide pane of its own.
+      await ui.press({ key: 'chain-wide' })
+      expect(opened.some(o => o.id === 'roadmap-chains' && o.columns === 200 && o.closeOnEscape === true)).toBe(true)
+    } else expect(await ui.find({ text: /⤢ Wide/ })).toBe(undefined)
     await ui.press({ key: 'view-tracks' })
     await ui.unmount()
   }
+  const wide = await $.ui.mount({ ...PANE, requestId: 'roadmap-chains', surface: 'desktop' })
+  expect(await wide.find({ text: /Esc closes this pane/ })).toBeDefined()
+  expect(await wide.find({ text: /Copy as Mermaid/ })).toBeDefined()
+  expect(await wide.find({ text: /⤢ Wide/ })).toBe(undefined)
+  await wide.unmount()
+  // A track whose chains are all done says so, and Show done draws them.
+  files.set('/home/t/.claude/roadmap/events/1002-o-x.json', JSON.stringify({ kind: 'step', at: 1002, session: 'p', track: 'web', id: '1', status: 'done', origin: 'person', actor: 'person' }))
+  files.set('/home/t/.claude/roadmap/events/1003-o-x.json', JSON.stringify({ kind: 'step', at: 1003, session: 'p', track: 'web', id: '2', status: 'done', origin: 'person', actor: 'person' }))
+  const later = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await later.press({ key: 'view-chains' })
+  await later.press({ key: 'chain-track-1' })
+  expect(await later.find({ text: /Every step in this track's chains is done \(2\)/ })).toBeDefined()
+  await later.press({ key: 'chain-done' })
+  expect(await later.find({ text: /→ ✓ web\/2 Form/ })).toBeDefined()
+  await later.unmount()
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

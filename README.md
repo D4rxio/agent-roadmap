@@ -89,7 +89,9 @@ or let it read and update one as it works. The pane opens on its own in the desk
 - **Chains.** One track at a time — this chat's by default, the others a click away — as boxes and arrows
   read top to bottom: the road ahead (finished steps that lead to nothing open are folded away), each
   dependency drawn once, the steps of other tracks it touches dashed, the next step outlined, the longest
-  open chain in bold (a text tree in the terminal). No dates, no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
+  open chain in bold (a text tree in the terminal); hover a box for its whole title, **Show done** to see
+  the folded steps, and **⤢ Wide** to open the diagram alone in a wide pane (Esc closes it). No dates,
+  no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
   ```` ```mermaid ```` block that GitHub, GitLab and Gitea render — paste it into a PR, an issue or a doc.
 - **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
   **↺ Unarchive**.
