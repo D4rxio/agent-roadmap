@@ -4,6 +4,7 @@ import type {
   RoadmapPriority,
   RoadmapAgent,
   RoadmapOrigin,
+  RoadmapProject,
   RoadmapBoard,
   RoadmapEvent,
   RoadmapLive,
@@ -168,6 +169,10 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         backlog: false,
         archived: false,
         review: trackReview,
+        // The first plan that says where it was laid out sets the track's project; later plans, from
+        // wherever, do not move it.
+        project: old?.project ?? e.project,
+        projectBy: old?.project ? old.projectBy : e.project ? 'plan' : undefined,
       })
       const s = sessions.get(e.session)
       if (s) s.track = e.track
@@ -193,6 +198,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         s.title = e.title
         s.actor = e.actor ?? s.actor
         s.track = e.track ?? s.track
+        s.project = e.project ?? s.project
         s.startedAt = Math.min(s.startedAt, e.at)
       }
     } else if (e.kind === 'agent') {
@@ -237,6 +243,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
 
   layOverPersonEdits(tracks, sorted)
   applyTriage(tracks, sorted, sessions)
+  inferProjects(tracks, sorted, sessions, lives)
 
   // Moves the person confirmed (a step's last word is the person's `moved`), each followed to where the
   // obligation ends up. A broken or looping chain ends nowhere: nothing it was meant to satisfy is.
@@ -412,12 +419,14 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       s.focus = isLive ? live.focus : undefined
       if (live.title) s.title = live.title
       s.track = s.track ?? live.track
+      s.project = s.project ?? live.project
     } else {
       sessions.set(live.session, {
         id: live.session,
         title: live.title || live.session.slice(0, 8),
         actor: 'claude',
         track: live.track,
+        project: live.project,
         startedAt: live.at,
         lastAt: live.at,
         isLive,
@@ -451,8 +460,63 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     tracks: [...tracks.values()].sort((a, b) => trackRank(a) - trackRank(b) || b.updatedAt - a.updatedAt),
     sessions: [...sessions.values()].sort((a, b) => b.lastAt - a.lastAt),
     agents: [...agents.values()].sort((a, b) => b.startedAt - a.startedAt),
+    projects: projectsOf([...tracks.values()], [...sessions.values()]),
     at: now,
   }
+}
+
+/**
+ * A track nobody placed takes the project of the chats that worked on it: the one most of its events came
+ * from. A track whose chats never said (events written before projects existed) stays unplaced.
+ */
+function inferProjects(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEvent[], sessions: Map<string, RoadmapSession>, lives: RoadmapLive[]) {
+  const of = (session: string) => sessions.get(session)?.project ?? lives.find(l => l.session === session)?.project
+  const votes = new Map<string, Map<string, number>>()
+  for (const e of sorted) {
+    if (e.kind !== 'plan' && e.kind !== 'step' && e.kind !== 'add' && e.kind !== 'review') continue
+    const p = of(e.session)
+    if (!p) continue
+    const v = votes.get(e.track) ?? new Map<string, number>()
+    v.set(p, (v.get(p) ?? 0) + 1)
+    votes.set(e.track, v)
+  }
+  for (const t of tracks.values()) {
+    if (t.projectBy) continue
+    const v = [...(votes.get(t.name) ?? new Map<string, number>())].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    if (v[0]) {
+      t.project = v[0][0]
+      t.projectBy = 'inferred'
+    }
+  }
+}
+
+/** The last part of a project's key: `/x/repos/api` → `api`. */
+export function projectLabel(key: string): string {
+  return key.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || key
+}
+
+/** Every project named by a track or a session, each with a name unique among them. */
+function projectsOf(tracks: RoadmapTrack[], sessions: RoadmapSession[]): RoadmapProject[] {
+  const keys = [...new Set([...tracks.map(t => t.project), ...sessions.map(s => s.project)].filter((k): k is string => !!k))]
+  const label = new Map(keys.map(k => [k, projectLabel(k)]))
+  const clash = (k: string) => keys.some(o => o !== k && label.get(o) === label.get(k))
+  return keys
+    .map(key => ({
+      key,
+      // Two repositories with one folder name: say which parent each lives in.
+      name: clash(key) ? `${label.get(key)} (${projectLabel(key.slice(0, key.length - (label.get(key) ?? '').length))})` : (label.get(key) ?? key),
+      tracks: tracks.filter(t => t.project === key && !t.archived).length,
+    }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+}
+
+/**
+ * The board one project sees: its own tracks and those nobody placed. `undefined` or `'*'` is every project.
+ * Sessions and agents stay whole: who is working where is useful across projects.
+ */
+export function forProject(board: RoadmapBoard, project: string | undefined): RoadmapBoard {
+  if (!project || project === '*') return board
+  return { ...board, tracks: board.tracks.filter(t => !t.project || t.project === project) }
 }
 
 export const ICONS: Record<RoadmapStatus, string> = {
@@ -556,6 +620,7 @@ function applyTriage(
   const prio = new Map<string, Said & { value: RoadmapPriority | null }>()
   const back = new Map<string, Said & { value: boolean }>()
   const archived = new Map<string, boolean>()
+  const placed = new Map<string, string | null>()
   const wins = (old: Said | undefined, next: Said) => !old || (next.person ? true : !old.person)
   for (const e of sorted) {
     if (e.kind !== 'triage') continue
@@ -570,6 +635,8 @@ function applyTriage(
     }
     // Archiving is the person's decision alone: a worker's word on it is ignored.
     if (e.archived !== undefined && person && e.id === undefined) archived.set(e.track, e.archived)
+    // So is placing a track in a project.
+    if (e.project !== undefined && person && e.id === undefined) placed.set(e.track, e.project)
   }
   for (const t of tracks.values()) {
     const tp = prio.get(t.name)
@@ -577,6 +644,10 @@ function applyTriage(
     t.priority = tp?.value ?? undefined
     t.backlog = tb?.value === true
     t.archived = archived.get(t.name) === true
+    if (placed.has(t.name)) {
+      t.project = placed.get(t.name) ?? undefined
+      t.projectBy = 'you'
+    }
     t.triagedBy = [tp, tb].filter((x): x is NonNullable<typeof x> => !!x).sort((x, y) => y.at - x.at)[0]?.by
     for (const s of t.steps) {
       const k = `${t.name}/${s.id}`
@@ -727,7 +798,7 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
   )
   const lines = [
     `${track}/${id} — ${s.title}`,
-    `Track: ${t.title}${t.backlog ? ' (track in backlog)' : ''} · phase: ${s.phase}`,
+    `Track: ${t.title}${t.backlog ? ' (track in backlog)' : ''} · phase: ${s.phase}${t.project ? ` · project: ${board.projects.find(p => p.key === t.project)?.name ?? projectLabel(t.project)}` : ''}`,
     `Status: ${s.status}${s.status === 'skipped' ? ` (${s.skipReason ?? 'no reason'})` : ''}${s.status === 'awaiting' && s.proposed === 'skipped' ? ` (a skip is proposed: ${s.skipReason ?? 'no reason'})` : ''}${s.status === 'awaiting' && s.proposed === 'moved' ? ` (a move to ${s.movedTo ?? '?'} is proposed: ${s.moveReason ?? 'no reason'})` : ''}${s.priority ? ` · priority ${s.priority}` : ''}${s.backlog ? ' · IN BACKLOG — do not work on it unless asked' : ''}${s.checkpoint ? ' · checkpoint: the person closes it' : ''}${s.addedBy ? ' · added by the person' : ''}`,
     s.stale
       ? 'Stale: marked running, but no chat or agent has been on it for hours — probably abandoned. Take it over (mark it running) or ask the person.'
@@ -777,9 +848,14 @@ export function progress(track: RoadmapTrack): { done: number; total: number } {
 }
 
 /** What the model reads at a session's start and from the status tool. */
-export function summary(board: RoadmapBoard, opts: { open?: number } = {}): string {
-  if (board.tracks.length === 0) return 'The roadmap has no tracks yet.'
+export function summary(whole: RoadmapBoard, opts: { open?: number; project?: string } = {}): string {
+  if (whole.tracks.length === 0) return 'The roadmap has no tracks yet.'
+  // A chat sees its own project's tracks (and those nobody placed); the others get one line.
+  const board = forProject(whole, opts.project)
   const lines: string[] = []
+  const here = opts.project && opts.project !== '*' ? whole.projects.find(p => p.key === opts.project) : undefined
+  if (here) lines.push(`Project: ${here.name}`)
+  if (!board.tracks.some(x => !x.archived)) lines.push('- no tracks in this project yet')
   for (const t of board.tracks.filter(x => !x.backlog && !x.archived)) {
     const { done, total } = progress(t)
     lines.push(`- ${t.priority ? `${t.priority} ` : ''}${t.name} — ${t.title}: ${done}/${total} done`)
@@ -826,6 +902,12 @@ export function summary(board: RoadmapBoard, opts: { open?: number } = {}): stri
     if (shelved.length) {
       lines.push(`    backlog (set aside, not to work on unless asked): ${shelved.map(s => `${t.name}/${s.id}`).join(', ')}`)
     }
+  }
+  const elsewhere = opts.project && opts.project !== '*' ? whole.projects.filter(p => p.key !== opts.project && p.tracks > 0) : []
+  if (elsewhere.length) {
+    lines.push(
+      `- other projects (not this chat's; roadmap status with all shows them): ${elsewhere.map(p => `${p.name} (${p.tracks} track${p.tracks === 1 ? '' : 's'})`).join(', ')}`,
+    )
   }
   const archivedTracks = board.tracks.filter(x => x.archived)
   if (archivedTracks.length) {

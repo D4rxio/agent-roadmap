@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkMove, doneAction, markAction, planAction, reviewAction, stepAction } from '../hooks/actions'
+import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1705,11 +1705,12 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
   // The clock ticks only when the test says so.
   const waiting: (() => void)[] = []
   on('clock.every', () => new Promise(resolve => waiting.push(() => resolve({ value: undefined }))))
+  const sleep = (ms: number) => new Promise(r => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => void }).setTimeout(() => r(undefined), ms))
   const tick = async () => {
-    for (let i = 0; i < 50 && waiting.length === 0; i++) await new Promise(r => setTimeout(r, 5))
+    for (let i = 0; i < 50 && waiting.length === 0; i++) await sleep(5)
     waiting.shift()?.()
-    for (let i = 0; i < 50 && waiting.length === 0; i++) await new Promise(r => setTimeout(r, 5))
-    await new Promise(r => setTimeout(r, 20))
+    for (let i = 0; i < 50 && waiting.length === 0; i++) await sleep(5)
+    await sleep(20)
   }
   on('session.start', (_$, e) => e)
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
@@ -1742,9 +1743,9 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
   hooks[1]!.mtimeMs = 3
   await tick()
   for (const surface of ['terminal', 'desktop'] as const) {
-    ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ text: /The roadmap plugin was updated — restart this chat/ })).toBeDefined()
-    await ui.unmount()
+    const each = await $.ui.mount({ ...PANE, surface })
+    expect(await each.find({ text: /The roadmap plugin was updated — restart this chat/ })).toBeDefined()
+    await each.unmount()
   }
   const b = await band()
   expect(await b.find({ text: /restart chat/ })).toBeDefined()
@@ -1756,6 +1757,121 @@ test('a chat whose plugin code changed on disk says to restart; a file merely to
   ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ text: /restart this chat/ })).toBe(undefined)
   await ui.unmount()
+})
+
+test('projects: a track belongs to the repo it was laid out from; the person can move it; each project sees its own', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, project?: string, session = 's') =>
+    ({ kind: 'plan', at, session, track, project, phases: [{ name: 'P', steps: [{ id: '1', title: `${track} work`, review: off }] }] }) as RoadmapEvent
+  const session = (at: number, id: string, project?: string) => ({ kind: 'session', at, session: id, title: id, actor: 'claude', project }) as RoadmapEvent
+  const step = (at: number, track: string, sessionId: string) =>
+    ({ kind: 'step', at, session: sessionId, track, id: '1', status: 'running', actor: 'claude', origin: 'agent' }) as RoadmapEvent
+  const triage = (at: number, track: string, project: string | null, origin = 'person') => ({ kind: 'triage', at, session: 'p', track, project, origin }) as RoadmapEvent
+  const track = (events: RoadmapEvent[], name: string) => fold(events, [], 9999).tracks.find(t => t.name === name)
+
+  // The first plan sets it; a later plan from another repo does not move it.
+  const base = [plan(1, 'web', '/repos/web'), plan(2, 'api', '/repos/api')]
+  expect(track(base, 'web')?.project).toBe('/repos/web')
+  expect(track(base, 'web')?.projectBy).toBe('plan')
+  expect(track([...base, plan(3, 'web', '/repos/api')], 'web')?.project).toBe('/repos/web')
+  // A track laid out before projects existed takes the project most of its chats worked in…
+  const legacy = [plan(1, 'docs'), session(2, 'a', '/repos/web'), session(2, 'b', '/repos/api'), step(3, 'docs', 'a'), step(4, 'docs', 'a'), step(5, 'docs', 'b')]
+  expect(track(legacy, 'docs')?.project).toBe('/repos/web')
+  expect(track(legacy, 'docs')?.projectBy).toBe('inferred')
+  // … and one nobody can place stays in no project.
+  expect(track([plan(1, 'docs')], 'docs')?.project).toBe(undefined)
+  // The person's word places it, or takes it out of any; an agent's word does not.
+  expect(track([...base, triage(5, 'web', '/repos/api')], 'web')?.project).toBe('/repos/api')
+  expect(track([...base, triage(5, 'web', '/repos/api')], 'web')?.projectBy).toBe('you')
+  expect(track([...legacy, triage(9, 'docs', null)], 'docs')?.project).toBe(undefined)
+  expect(track([...base, triage(5, 'web', '/repos/api', 'agent')], 'web')?.project).toBe('/repos/web')
+
+  // Projects are named by their folder, made unique when two share a name.
+  const twins = fold([plan(1, 'a', '/x/one/api'), plan(2, 'b', '/x/two/api'), plan(3, 'c', '/repos/web')], [], 9)
+  expect(twins.projects.map(p => p.name)).toEqual(['api (one)', 'api (two)', 'web'])
+  expect(twins.projects.find(p => p.key === '/repos/web')?.tracks).toBe(1)
+
+  // A project sees its own tracks and those placed nowhere; '*' sees every one.
+  const board = fold([...base, plan(3, 'docs')], [], 9)
+  expect(forProject(board, '/repos/web').tracks.map(t => t.name).sort()).toEqual(['docs', 'web'])
+  expect(forProject(board, '*').tracks.length).toBe(3)
+  // The agents' summary is the chat's project, with the others named in one line.
+  const said = summary(board, { project: '/repos/web' })
+  expect(said).toContain('Project: web')
+  expect(said).toContain('web/1 web work')
+  expect(said).toContain('docs/1 docs work')
+  expect(said).not.toContain('api/1 api work')
+  expect(said).toContain('other projects (not this chat\'s; roadmap status with all shows them): api (1 track)')
+  // The tools: a plan records the chat's project, status scopes to it unless asked for all, a brief names it.
+  const ctx = { events: base, lives: [], now: 50, session: 's9', actor: 'claude', project: '/repos/web' }
+  const laid = planAction(ctx, { track: 'ops', phases: [{ name: 'P', steps: [{ id: '1', title: 'Ops', review: off }] }] })
+  expect(fold([...base, ...laid.emit], [], 99).tracks.find(t => t.name === 'ops')?.project).toBe('/repos/web')
+  expect(statusAction(ctx).text).not.toContain('api/1')
+  expect(statusAction(ctx, { all: true }).text).toContain('api/1')
+  expect(brief(board, 'api', '1')).toContain('project: api')
+})
+
+test('the pane shows this chat\'s project, switches to another or All, and places a track', async ($, on) => {
+  const off = { required: false }
+  const plan = (at: number, track: string, project?: string) => ({ kind: 'plan', at, session: 's', track, title: track.toUpperCase(), project, phases: [{ name: 'P', steps: [{ id: '1', title: `${track} work`, review: off }] }] })
+  const events = [plan(1000, 'web', '/repos/web'), plan(1001, 'api', '/repos/api'), plan(1002, 'docs')]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  // This chat works in a worktree of the web repository.
+  on('process.run', (_$, e) =>
+    e.argv[0] === 'git'
+      ? { value: { exitCode: 0, stdout: '/repos/web/.git\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } },
+  )
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-proj' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/repos/web-wt/feature', surface: null, isInteractive: true } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // This chat's project, and the tracks placed nowhere.
+  expect(await ui.find({ text: /\[web\]/ })).toBeDefined()
+  expect(await ui.find({ text: /WEB/ })).toBeDefined()
+  expect(await ui.find({ text: /DOCS/ })).toBeDefined()
+  expect(await ui.find({ text: /API/ })).toBe(undefined)
+  expect(await ui.find({ text: /in no project/ })).toBeDefined()
+  // Another project, then All.
+  await ui.press({ key: 'proj-0' })
+  expect(await ui.find({ text: /API/ })).toBeDefined()
+  expect(await ui.find({ text: /WEB/ })).toBe(undefined)
+  await ui.press({ key: 'proj-all' })
+  expect(await ui.find({ text: /WEB/ })).toBeDefined()
+  expect(await ui.find({ text: /API/ })).toBeDefined()
+  // Placing the unplaced track: the first press puts it in the first project.
+  await ui.press({ key: 'tplace-docs' })
+  expect([...files.values()].some(t => t.includes('"kind":"triage"') && t.includes('"project":"/repos/api"') && t.includes('"origin":"person"'))).toBe(true)
+  await ui.unmount()
+  // The band speaks for this chat's project.
+  const band = await $.ui.mount({
+    plugin: 'roadmap',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 5 } } as never,
+  })
+  expect(await band.find({ text: /web 0%/ })).toBeDefined()
+  expect(await band.find({ text: /api 0%/ })).toBe(undefined)
+  await band.unmount()
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

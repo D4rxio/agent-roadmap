@@ -46,6 +46,8 @@ export type RoadmapEvent =
       /** The track's default review policy for its steps. */
       review?: RoadmapReviewPolicy
       actor?: string
+      /** The project (its main repository's folder) the plan was laid out from; the first one sets the track's. */
+      project?: string
     }
   /** A review of a step's work, written by the reviewer (its own session and actor). */
   | {
@@ -82,7 +84,7 @@ export type RoadmapEvent =
       origin?: RoadmapOrigin
       actor?: string
     }
-  | { kind: 'session'; at: number; session: string; title: string; track?: string; actor?: string }
+  | { kind: 'session'; at: number; session: string; title: string; track?: string; actor?: string; project?: string }
   | {
       kind: 'agent'
       at: number
@@ -131,6 +133,8 @@ export type RoadmapEvent =
       backlog?: boolean
       /** A whole track archived (true) or brought back (false). The person's word only. */
       archived?: boolean
+      /** A whole track put in a project (its key), or taken out of any (null). The person's word only. */
+      project?: string | null
       origin?: RoadmapOrigin
     }
 
@@ -143,6 +147,8 @@ export type RoadmapLive = {
   activity?: string
   /** The item this chat holds: `<track>/<id>` (or a bare track). */
   focus?: string
+  /** The project this session works in. */
+  project?: string
   at: number
   agents: { agentId: string; activity?: string; tools: number }[]
 }
@@ -225,6 +231,13 @@ export type RoadmapTrack = {
   triagedBy?: string
   /** The default review policy for the track's steps. */
   review?: RoadmapReviewPolicy
+  /**
+   * The project the track belongs to: a key (the main repository's folder; worktrees share it). Absent
+   * when nobody can tell; such a track shows in every project.
+   */
+  project?: string
+  /** Who decided it: the person, the first plan, or inferred from the chats that worked on it. */
+  projectBy?: 'you' | 'plan' | 'inferred'
 }
 
 export type RoadmapReview = { actor: string; session: string; verdict: 'pass' | 'findings' | 'fail'; at: number; evidence?: string; note?: string; via?: string }
@@ -240,6 +253,8 @@ export type RoadmapSession = {
   activity?: string
   /** The item this live chat holds, `<track>/<id>`. */
   focus?: string
+  /** The project this session works in. */
+  project?: string
 }
 
 export type RoadmapAgent = {
@@ -256,10 +271,21 @@ export type RoadmapAgent = {
   tools: number
 }
 
+export type RoadmapProject = {
+  /** The main repository's folder (worktrees share it), or the working folder outside git. */
+  key: string
+  /** Its folder's name, made unique among the projects shown. */
+  name: string
+  /** Tracks that belong to it (archived ones not counted). */
+  tracks: number
+}
+
 export type RoadmapBoard = {
   tracks: RoadmapTrack[]
   sessions: RoadmapSession[]
   agents: RoadmapAgent[]
+  /** Every project known from tracks and sessions, by name. */
+  projects: RoadmapProject[]
   at: number
 }
 
@@ -284,6 +310,8 @@ declare module 'claude-code' {
       phaseOpen: Record<string, boolean>
       /** The plugin's code on disk changed since this chat loaded it: a restart loads the new one. */
       outdated: boolean
+      /** Which project the pane shows: '' this chat's own, '*' every project, or a project's key. */
+      project: string
     }
   }
 }

@@ -5,10 +5,10 @@
 // change is a new event file, nothing is rewritten, the board is folded from all events by the mod's
 // own model (hooks/model.ts; Node >= 23.6 runs it as is). Needs no server and no dependencies.
 //
-//   roadmap status                      open steps by priority, and who is working now
+//   roadmap status [--all]              this project's open steps by priority (--all: every project), who works now
 //   roadmap step <track>/<id>           a step's brief: why, scope, done when, waits on, unblocks
 //   roadmap json                        the whole folded board as JSON, for analysis
-//   roadmap md [track]                  the roadmap (or one track) as Markdown
+//   roadmap md [track] [--all]          this project's roadmap (or one track) as Markdown
 //   roadmap plan <track> <file|->       lay out a track from JSON {title?, phases:[{name, steps:[…]}]}
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
 //                                       status: todo running done failed blocked skipped moved
@@ -80,7 +80,19 @@ const via = detected ? detected[1] : 'declared'
 if (detected && flags.actor && String(flags.actor) !== actor) {
   process.stderr.write(`roadmap: --actor ${flags.actor} ignored: this runs inside ${actor === 'codex' ? 'Codex' : 'Claude Code'}, so the actor is ${actor}\n`)
 }
-const project = basename(process.cwd())
+/** The project this runs in: the main repository's folder (worktrees share it), else the working folder. */
+function detectProject() {
+  try {
+    const dir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (dir) return dir.replace(/[\\/]\.git[\\/]?$/, '').replace(/[\\/]+$/, '')
+  } catch {}
+  return process.cwd().replace(/[\\/]+$/, '')
+}
+const projectKey = detectProject()
+const project = basename(projectKey)
 const day = new Date().toISOString().slice(0, 10)
 const session = String(
   flags.session ||
@@ -165,13 +177,13 @@ function heartbeat(activity, focus) {
   mkdirSync(join(DIR, 'live'), { recursive: true })
   const path = join(DIR, 'live', `${session}.json`)
   const old = existsSync(path) ? parse(readFileSync(path, 'utf8')) : undefined
-  const live = { session, title, at: Date.now(), activity, focus: focus ?? old?.focus, agents: [] }
+  const live = { session, title, at: Date.now(), activity, focus: focus ?? old?.focus, project: projectKey, agents: [] }
   writeFileSync(path, JSON.stringify(live))
 }
 
 function sessionEvent(events) {
   if (!events.some(e => e.kind === 'session' && e.session === session)) {
-    emit({ kind: 'session', at: Date.now(), session, title, actor })
+    emit({ kind: 'session', at: Date.now(), session, title, actor, project: projectKey })
   }
 }
 
@@ -187,7 +199,7 @@ const offset = -new Date().getTimezoneOffset()
 function act(run, activity) {
   const { events, lives } = load()
   const old = existsSync(join(DIR, 'live', `${session}.json`)) ? parse(readFileSync(join(DIR, 'live', `${session}.json`), 'utf8')) : undefined
-  const r = run({ events, lives, now: Date.now(), session, actor, via, channel: 'cli', focus: old?.focus })
+  const r = run({ events, lives, now: Date.now(), session, actor, via, channel: 'cli', project: projectKey, focus: old?.focus })
   if (!r.ok) fail(r.text)
   if (r.emit.length) sessionEvent(events)
   for (const ev of r.emit) emit(ev)
@@ -197,7 +209,7 @@ function act(run, activity) {
 
 switch (command) {
   case 'status':
-    act(ctx => actions.statusAction(ctx), 'roadmap status')
+    act(ctx => actions.statusAction(ctx, { all: flags.all }), 'roadmap status')
     break
   case 'step':
     act(ctx => actions.stepAction(ctx, { step: args[0] }), `roadmap step ${args[0] ?? ''}`)
@@ -211,7 +223,8 @@ switch (command) {
     const { b } = board()
     const t = args[0] && b.tracks.find(x => x.name === args[0])
     if (args[0] && !t) fail(`no track "${args[0]}"`)
-    process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset) : model.boardMarkdown(b, Date.now(), offset)) + '\n')
+    const shown = model.forProject(b, flags.all ? '*' : projectKey)
+    process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset) : model.boardMarkdown(shown, Date.now(), offset)) + '\n')
     break
   }
   case 'plan': {

@@ -7,8 +7,9 @@ update it with the `roadmap` CLI; never edit its files by hand.
 R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
 ```
 
-- **At the start of a task**, run `$R status` to see the tracks, the open steps in priority order (P0
-  first), what is blocked, what is in the backlog, and which chats are working on what.
+- **At the start of a task**, run `$R status` to see this project's tracks (the repository you run it in),
+  the open steps in priority order (P0 first), what is blocked, what is in the backlog, and which chats are
+  working on what. `$R status --all` shows every project.
 - **Before working on a step**, read its brief: `$R step <track>/<id>` (why, scope, done when, what it
   waits on and unblocks). If it says another chat holds the step, ask the person before taking it.
 - **When you start**, mark it: `$R mark <track>/<id> running`.

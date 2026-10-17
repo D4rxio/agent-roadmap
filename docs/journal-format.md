@@ -87,6 +87,13 @@ Any tool may read it, and append to it under the same rules, so other agents and
   review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
   accident; it does not prove them, which is why a cross-model pass waits for the person.
 - `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
+- **Projects.** `session`, `plan` and live files may carry `project`: the folder of the main repository the
+  writer works in (found through git's common dir, so every worktree of one repository is one project;
+  outside git, the working folder). A track's project is, in order: the person's track-level `triage` with
+  `project` (a key, or `null` for none — the person's word only); else the first `plan` that names one;
+  else the project most of the track's `plan`/`step`/`add`/`review` events came from (by their session's
+  project); else none. A track in no project shows in every project. Readers show a chat its own project
+  by default; `blocked_by` across projects is allowed.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.

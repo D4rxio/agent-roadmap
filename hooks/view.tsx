@@ -7,7 +7,16 @@ type Els = Record<string, any>
 export type RoadmapView = 'tracks' | 'days' | 'backlog'
 
 export type PaneData = {
+  /** The board for the project shown (its tracks and those not placed in any); `projects` lists them all. */
   board: RoadmapBoard
+  /** The project shown: a key, or '*' for every project. */
+  project?: string
+  /** This chat's own project. */
+  here?: string
+  /** Show a project: '' this chat's own, '*' every one, or a key. */
+  onProjectView?: (project: string) => void
+  /** The person places a track in a project, or in none (null). */
+  onPlace?: (track: string, project: string | null) => void
   view: RoadmapView
   expanded: string[]
   now: number
@@ -282,7 +291,24 @@ function header(els: Els, d: PaneData) {
       {d.view === view ? `[${label}]` : ` ${label} `}
     </Button>
   )
+  // With more than one project, a row to pick which one the pane shows; this chat's own is the default.
+  const projects = d.board.projects.filter(p => p.tracks > 0 || p.key === d.here)
+  const picker =
+    d.onProjectView && projects.length > 1 ? (
+      <Box key="projects" flexDirection="row" gap={1} marginBottom={1}>
+        {projects.map((p, i) => (
+          <Button key={`proj-${i}`} plain variant={d.project === p.key ? 'primary' : undefined} onPress={() => d.onProjectView?.(p.key === d.here ? '' : p.key)}>
+            {d.project === p.key ? `[${p.name}]` : ` ${p.name} `}
+          </Button>
+        ))}
+        <Button key="proj-all" plain variant={d.project === '*' ? 'primary' : undefined} onPress={() => d.onProjectView?.('*')}>
+          {d.project === '*' ? '[All]' : ' All '}
+        </Button>
+      </Box>
+    ) : null
   return (
+    <Box key="header-wrap" flexDirection="column">
+    {picker}
     <Box key="header" flexDirection="row" gap={1} marginBottom={1}>
       <Text bold>Roadmap</Text>
       {tab('tracks', 'Tracks')}
@@ -295,6 +321,7 @@ function header(els: Els, d: PaneData) {
       <Button key="copy-all" plain onPress={(press: any) => d.onCopyAll(press?.surface ?? 'desktop')}>
         ⧉ Copy all as Markdown
       </Button>
+    </Box>
     </Box>
   )
 }
@@ -396,6 +423,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
     blocked ? `⊘ ${blocked}` : '',
     live ? `● ${live} live` : '',
     shelved.length ? `${shelved.length} in backlog` : '',
+    !t.project && d.board.projects.length > 1 ? 'in no project' : '',
   ].filter(Boolean)
   return (
     <Box key={`track-${t.name}`} flexDirection="column" marginBottom={1}>
@@ -409,6 +437,15 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
         <Box flexDirection="row" display={d.canDraw ? 'none' : 'flex'} hover={d.canDraw ? { display: 'flex' } : undefined}>
           {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => d.onCopyText(t.title, press?.surface ?? 'desktop') }, 'Copy', <Text><Text dimColor>Copy</Text></Text>)}
           {Btn(els, d, { key: `tshelve-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, !t.backlog) }, "Backlog", <Text><Text dimColor>{t.backlog ? '' : 'Backlog'}</Text></Text>)}
+          {d.onPlace && d.board.projects.length > 0
+            ? (() => {
+                // Each press moves the track to the next project, then to none, then round again.
+                const keys: (string | null)[] = [...d.board.projects.map(p => p.key), null]
+                const next = keys[(keys.indexOf(t.project ?? null) + 1) % keys.length] ?? null
+                const label = `⌂ ${d.board.projects.find(p => p.key === t.project)?.name ?? 'no project'}`
+                return Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, label, <Text><Text dimColor>{label}</Text></Text>)
+              })()
+            : null}
           {!t.archived && !(done === total && total > 0)
             ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Archive', <Text><Text dimColor>Archive</Text></Text>)
             : null}

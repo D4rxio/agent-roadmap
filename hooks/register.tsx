@@ -13,6 +13,7 @@ import {
   STATUSES,
   describeCall,
   fold,
+  forProject,
   progress,
   refInText,
   summary,
@@ -32,7 +33,7 @@ const TOOL_STATUS = 'mcp__roadmap__status'
 const TOOL_STEP = 'mcp__roadmap__step'
 const TOOL_DONE = 'mcp__roadmap__done'
 const TOOL_REVIEW = 'mcp__roadmap__review'
-const EMPTY: RoadmapBoard = { tracks: [], sessions: [], agents: [], at: 0 }
+const EMPTY: RoadmapBoard = { tracks: [], sessions: [], agents: [], projects: [], at: 0 }
 
 const board = atom({ plugin: 'roadmap', key: 'board' } as const, EMPTY)
 const view = atom({ plugin: 'roadmap', key: 'view' } as const, 'tracks')
@@ -44,6 +45,21 @@ const editing = atom({ plugin: 'roadmap', key: 'editing' } as const, '')
 const focus = atom({ plugin: 'roadmap', key: 'focus' } as const, '')
 const phaseOpen = atom({ plugin: 'roadmap', key: 'phaseOpen' } as const, {} as Record<string, boolean>)
 const outdated = atom({ plugin: 'roadmap', key: 'outdated' } as const, false)
+/** Which project the pane shows: '' this chat's own, '*' every project, or a project's key. */
+const projectView = atom({ plugin: 'roadmap', key: 'project' } as const, '')
+
+/**
+ * The project a folder belongs to: its main repository's folder, found through git's common dir so every
+ * worktree of one repository is one project. Outside git, the folder itself.
+ */
+async function detectProject($: EngineInterface, cwd: string): Promise<string> {
+  const git = await $.process
+    .run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+    .catch(() => undefined)
+  const dir = git?.exitCode === 0 ? git.stdout.trim() : ''
+  const root = dir ? dir.replace(/[\\/]\.git[\\/]?$/, '') : cwd
+  return root.replace(/[\\/]+$/, '') || cwd
+}
 
 /**
  * The code this chat loaded. A chat keeps the plugin it started with, so after an update on disk it runs
@@ -103,6 +119,8 @@ const journal = {
   richButtons: false,
   /** Whether Codex is installed beside Claude: a step that needs a cross-model review can use it. */
   codexInstalled: false,
+  /** The project this chat works in (its main repository's folder). */
+  project: undefined as string | undefined,
   isOpened: false,
   /** Every event read, by its name (a loose file's name, or the name it had before it was archived). */
   seen: new Set<string>(),
@@ -319,6 +337,7 @@ async function heartbeat($: EngineInterface, force = false): Promise<boolean> {
     track: journal.track,
     activity: journal.activity,
     focus: journal.focus,
+    project: journal.project,
     at: force && !busy ? now - LIVE_MS : now,
     agents: [...journal.agents].map(([agentId, a]) => ({ agentId, ...a })),
   }
@@ -383,6 +402,13 @@ async function personTrackTriage($: EngineInterface, track: string, change: { pr
 }
 
 /** The person archives a track or brings it back: their decision alone, so only the pane writes it. */
+/** The person places a track in a project (a key), or in none (null): their word, as with archiving. */
+async function personPlace($: EngineInterface, track: string, project: string | null) {
+  await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, project, origin: 'person' })
+  const name = project ? (await read($, board)).projects.find(p => p.key === project)?.name ?? project : 'no project'
+  $.ui.toast(`⌂ ${track} → ${name}`)
+}
+
 async function personArchive($: EngineInterface, track: string, archived: boolean) {
   await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, archived, origin: 'person' })
   $.ui.toast(archived ? `${track} archived — the Backlog tab brings it back` : `↺ ${track} unarchived`)
@@ -448,6 +474,7 @@ async function act($: EngineInterface, run: (ctx: ActionContext) => ActionResult
     channel: 'tool',
     track: journal.track,
     focus: journal.focus,
+    project: journal.project,
     hints: { codexInstalled: journal.codexInstalled, cli: 'node ~/.claude/mods/roadmap/cli/roadmap.mjs' },
   })
   if (!r.ok) return { result: r.text }
@@ -475,6 +502,7 @@ export const register: Register = on => {
     journal.richButtons = !!engine && versionAtLeast(engine.base ?? engine.version, '2.1.295')
     const which = await $.process.run(['which', 'codex']).catch(() => undefined)
     journal.codexInstalled = which?.exitCode === 0 && !!which.stdout.trim()
+    journal.project = e.cwd ? await detectProject($, e.cwd).catch(() => e.cwd) : undefined
     await update($, tzOffset, () => 0)
     void hostOffset($).then(min => update($, tzOffset, () => min)).catch(() => undefined)
     const band = await $.store.get('band').catch(() => undefined)
@@ -659,8 +687,10 @@ export const register: Register = on => {
       name: 'status',
       isDeferred: false,
       description:
-        'Read the roadmap shared by all sessions: every track with its open steps, plus the sessions working now.',
-      inputSchema: { type: 'object', properties: {} },
+        'Read the roadmap shared by all sessions: the tracks of this chat\'s project (and those not placed in ' +
+        'any) with their open steps, the other projects in one line, and the sessions working now. `all: true` ' +
+        'shows every project\'s tracks.',
+      inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Every project, not only this chat\'s.' } } },
     })
 
     await noteCode($).catch(() => undefined)
@@ -707,7 +737,7 @@ export const register: Register = on => {
     if (now.tracks.length === 0) return ran
     const text =
       'A roadmap shared by all Claude sessions on this machine is shown to the person in the Roadmap pane.\n' +
-      summary(now) +
+      summary(now, { project: journal.project }) +
       '\nIf this task is one of these steps: read its brief first (roadmap step), mark it running when you ' +
       'start, and close it with roadmap done (what shipped, evidence, follow-ups). A step whose review policy ' +
       'requires a review only counts as done after one that meets it (cross-model: another model family reviews ' +
@@ -728,7 +758,7 @@ export const register: Register = on => {
     if (!journal.title && !e.text.trim().startsWith('/')) {
       journal.title = titleOf(e.text)
       if (journal.title) {
-        await emit($, { kind: 'session', at: Date.now(), session: journal.me, title: journal.title, actor: 'claude' }).catch(
+        await emit($, { kind: 'session', at: Date.now(), session: journal.me, title: journal.title, actor: 'claude', project: journal.project }).catch(
           () => undefined,
         )
       }
@@ -745,7 +775,7 @@ export const register: Register = on => {
       return { text: `Roadmap band above the prompt ${next ? 'shown' : 'hidden'}.` }
     }
     if (arg === 'copy') {
-      const b = await read($, board)
+      const b = forProject(await read($, board), (await read($, projectView)) || journal.project || '*')
       const done = await $.ui.copy({ text: boardMarkdown(b, Date.now(), await read($, tzOffset)) })
       return { text: done.isCopied ? 'Roadmap copied as Markdown.' : `Could not copy: ${done.reason}` }
     }
@@ -767,7 +797,7 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_MARK }, ($, e) => act($, ctx => markAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_DONE }, ($, e) => act($, ctx => doneAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_STEP }, ($, e) => act($, ctx => stepAction(ctx, e as unknown as Record<string, unknown>)))
-  on('tool.call', { tool: TOOL_STATUS }, $ => act($, ctx => statusAction(ctx)))
+  on('tool.call', { tool: TOOL_STATUS }, ($, e) => act($, ctx => statusAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_REVIEW }, ($, e) => act($, ctx => reviewAction(ctx, e as unknown as Record<string, unknown>)))
 
   // Live status: what this session and each of its agents is doing now.
@@ -817,8 +847,15 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const tz = await read($, tzOffset)
+    // The pane shows one project: this chat's own unless the person picked another, or All.
+    const picked = await read($, projectView)
+    const shown = picked || journal.project || '*'
     return drawPane(els, {
-      board: await read($, board),
+      board: forProject(await read($, board), shown),
+      project: shown,
+      here: journal.project,
+      onProjectView: (p: string) => void update($, projectView, () => p),
+      onPlace: (track: string, p: string | null) => void personPlace($, track, p),
       outdated: await read($, outdated),
       richButtons: journal.richButtons,
       view: (await read($, view)) as RoadmapView,
@@ -842,7 +879,7 @@ export const register: Register = on => {
         })(),
       onCopyAll: surface =>
         void (async () => {
-          const done = await $.ui.copy({ text: boardMarkdown(await read($, board), Date.now(), tz), surface: surface as never })
+          const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
           $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
         })(),
       onCopyText: (text, surface) =>
@@ -875,7 +912,8 @@ export const register: Register = on => {
     const b = await read($, board)
     if (b.tracks.length === 0) return next(e)
     return drawBand($.ui.resolve(e), {
-      board: b,
+      // The band speaks for this chat's project.
+      board: forProject(b, journal.project),
       isOpen: await read($, paneOpen),
       cols: e.props.bodyColumns,
       onToggle: () => void togglePane($),

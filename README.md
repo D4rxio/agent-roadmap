@@ -86,6 +86,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
   sessions, agents.
 - **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
   **↺ Unarchive**.
+- **Projects.** Tracks belong to the repository they were laid out from (worktrees count as one). The
+  pane shows this chat's project — plus tracks in no project — with a row to switch to another or **All**;
+  hover a track header for **⌂** to move it to another project. The band and the agents' summary stay on
+  the chat's own project and name the others in one line.
 - **This chat.** The step this chat holds, first thing in its pane; every pane marks which chat holds which step.
 - **Needs you.** Checkpoints, proposed skips and moves, and reviews to confirm, each waiting for
   **Confirm / Reject**; failed steps; and steps left running with nobody on them (**◌ stale**).
@@ -120,7 +124,7 @@ pass comes to **Needs you** with the reviewer and the evidence, and your **Confi
 | `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
 | `roadmap review` | record a review of a step's work: pass, findings or fail, with evidence |
-| `roadmap status` | read every track's open steps and who is working on what |
+| `roadmap status` | read this project's open steps (`all` for every project) and who is working on what |
 
 ## Other agents: the CLI
 
@@ -128,7 +132,7 @@ Codex, scripts or any agent that can run a command use the same roadmap through 
 (Node ≥ 23.6, no dependencies; it runs the plugin's own model, so the rules are the same):
 
 ```
-node cli/roadmap.mjs status                 # open steps by priority, who is working on what
+node cli/roadmap.mjs status                 # this project's open steps by priority (--all: every project)
 node cli/roadmap.mjs step api/2.1           # a step's brief
 node cli/roadmap.mjs json                   # the whole board, for analysis
 node cli/roadmap.mjs plan api plan.json     # lay out a track from JSON

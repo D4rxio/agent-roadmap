@@ -38,6 +38,8 @@ export type ActionContext = {
   via?: string
   /** Which front end writes: the mod's own tools, or the shared CLI. */
   channel?: 'tool' | 'cli'
+  /** The project the writer works in (its main repository's folder): plans record it, status scopes to it. */
+  project?: string
   /** What this machine offers for a review by another model, e.g. Codex installed beside Claude. */
   hints?: { codexInstalled?: boolean; cli?: string }
 }
@@ -172,6 +174,7 @@ export function planAction(ctx: ActionContext, input: Record<string, unknown>): 
     phases: phases.map(p => ({ name: p.name, steps: p.steps.map(({ reviewError: _e, ...step }) => step) })),
     review: trackPolicy.policy,
     actor: ctx.actor,
+    project: ctx.project,
   }
   const would = fold([...ctx.events, planned], [], ctx.now)
   const loop = findCycle(would.tracks)
@@ -430,13 +433,14 @@ export function stepAction(ctx: ActionContext, input: Record<string, unknown>): 
 }
 
 /** Every track's open steps, and the other chats working now. */
-export function statusAction(ctx: ActionContext): ActionResult {
+export function statusAction(ctx: ActionContext, input: Record<string, unknown> = {}): ActionResult {
   const board = fold(ctx.events, ctx.lives, ctx.now)
+  const all = input.all === true || input.all === 'true'
   const live = board.sessions.filter(s => s.isLive && s.id !== ctx.session)
   const others = live.length
     ? `\nOther sessions working now:\n${live
         .map(s => `- ${s.title}${s.focus ? ` [holds ${s.focus}]` : s.track ? ` [${s.track}]` : ''}${s.activity ? ` → ${s.activity}` : ''}`)
         .join('\n')}`
     : ''
-  return { ok: true, text: summary(board, { open: 50 }) + others, emit: [] }
+  return { ok: true, text: summary(board, { open: 50, project: all ? '*' : ctx.project }) + others, emit: [] }
 }
