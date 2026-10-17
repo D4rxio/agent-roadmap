@@ -14,14 +14,13 @@ what happened across five chats, and a fresh session knows where things stand.
 <p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, a step moved to another track, a cross-model review waiting for confirmation, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
-## What's new in 0.4.0
+## What's new in 0.5.0
 
-- **Review policy** — a step can require a review, e.g. by a different model (Claude builds, Codex
-  reviews); its done waits for one, and a cross-model pass comes to you to confirm.
-- **Moved** — hand a step's obligation to another step (not done, not skipped); its dependents and its
-  review policy follow it.
-- **Archive a track** — hide a finished track; its history stays, and you can bring it back.
-- **Abandoned work is flagged** — a step left running with nobody on it shows as stale.
+- **Projects** — tracks belong to the repository they were laid out from; each chat sees its own.
+- **What's next** — each track shows the step to pick up next and its longest open chain; each step, how
+  many open steps wait on it.
+- **Chains** — one track's dependencies as boxes and arrows, and as a Mermaid diagram for a PR or a doc.
+- **Plugin updated?** — the pane says so and hands you `/reload-plugins`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 

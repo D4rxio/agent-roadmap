@@ -3,6 +3,39 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-10-17
+
+### Added
+- **Projects.** Tracks belong to the repository they were laid out from; every worktree of one
+  repository is one project. The pane opens on this chat's project (plus tracks in no project), with a
+  row to switch to another or **All**; hover a track's header for **⌂** to move it to another project.
+  Chats and agents of other projects stay out too. The band, the agents' summary, `roadmap status` and
+  Copy as Markdown stay on the chat's project and name the others in one line (`all` shows every one). A
+  dependency on another project's step says which project it is in. Tracks laid out before projects take
+  the project their chats worked in; those nobody can place show everywhere until you place them.
+- **What to pick up next.** A track card shows **▸ next** — the step that waits on nothing and that
+  nobody is on, most urgent first, then the one that unblocks most — and its longest open chain, in steps
+  (never days). Each open step shows **⇢N**: how many open steps wait on it, down the chain, across
+  tracks and through moves. Agents read the same in their summary and in a step's brief.
+- **Chains tab.** One track at a time — this chat's by default — as boxes and arrows read top to bottom:
+  the road ahead (finished steps that lead to nothing open fold away), each dependency drawn once, steps
+  of other tracks it touches dashed, the next step outlined, the longest open chain in bold; a text tree
+  in the terminal. **⧉ Copy as Mermaid** and `roadmap mermaid [track] [--out file.md]` give the diagram
+  as a Mermaid block that GitHub, GitLab and Gitea render, for a PR, an issue or a doc; the same board
+  always gives the same text.
+- **A chat says when its plugin is outdated.** A chat keeps the code it started with; when the plugin's
+  files on disk change, the pane says "↻ Roadmap updated — run /reload-plugins", with **Copy command**.
+- **A move going nowhere comes to you.** Two moves confirmed at the same moment can close a loop; Needs
+  you shows it with **Undo move**.
+
+### Changed
+- **A tidier top of the pane.** A short ⧉ Copy, so the tabs are never cut; "This chat" on one line.
+
+### Fixed
+- **A chat started before an update could show a blank pane.** The pane and the band now draw in a chat
+  older than some of their state keys, and a pane that cannot draw says why instead of staying blank.
+- CLI yes/no flags read `--all false` and `--failed false` as no.
+
 ## [0.4.0] — 2026-10-17
 
 ### Added
@@ -108,6 +141,7 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
+[0.5.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.0
 [0.4.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.2.0
