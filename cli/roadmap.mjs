@@ -190,10 +190,11 @@ function heartbeat(activity, focus) {
 }
 
 /** Announces this session once — and again when it now works in another project than it last said. */
-function sessionEvent(events) {
+function sessionEvent(events, at) {
   const said = events.filter(e => e.kind === 'session' && e.session === session).sort((a, b) => a.at - b.at).pop()
   if (!said || said.project !== projectKey) {
-    emit({ kind: 'session', at: Date.now(), session, title, actor, project: projectKey })
+    // At the moment of the work it comes with, not after it: the work then reads as done in this project.
+    emit({ kind: 'session', at, session, title, actor, project: projectKey })
   }
 }
 
@@ -209,9 +210,10 @@ const offset = -new Date().getTimezoneOffset()
 function act(run, activity) {
   const { events, lives } = load()
   const old = existsSync(join(DIR, 'live', `${session}.json`)) ? parse(readFileSync(join(DIR, 'live', `${session}.json`), 'utf8')) : undefined
-  const r = run({ events, lives, now: Date.now(), session, actor, via, channel: 'cli', project: projectKey, focus: old?.focus })
+  const now = Date.now()
+  const r = run({ events, lives, now, session, actor, via, channel: 'cli', project: projectKey, focus: old?.focus })
   if (!r.ok) fail(r.text)
-  if (r.emit.length) sessionEvent(events)
+  if (r.emit.length) sessionEvent(events, Math.min(now, ...r.emit.map(e => e.at)))
   for (const ev of r.emit) emit(ev)
   heartbeat(activity, r.focus)
   process.stdout.write(r.text + '\n')

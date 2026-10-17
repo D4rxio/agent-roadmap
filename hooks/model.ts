@@ -461,6 +461,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
   for (const s of sessions.values()) {
     const list = declared.get(s.id)
     s.project = list?.length ? list[list.length - 1]!.project : undefined
+    s.startProject = projectAt(s.id, s.startedAt)
   }
   for (const a of agents.values()) a.project = projectAt(a.session, a.startedAt)
 
@@ -556,7 +557,8 @@ export function forProject(board: RoadmapBoard, project: string | undefined): Ro
   if (!project || project === '*') return board
   const name = (key: string) => (board.projects ?? []).find(p => p.key === key)?.name ?? projectLabel(key)
   // Like tracks: a chat in another project stays out; one that never said where it works shows everywhere.
-  const sessions = board.sessions.filter(s => !s.project || s.project === project)
+  // A chat that started here and moved on stays for history (its start); `workingIn` says where it is now.
+  const sessions = board.sessions.filter(s => !s.project || s.project === project || s.startProject === project)
   const ids = new Set(sessions.map(s => s.id))
   return {
     ...board,
@@ -564,8 +566,14 @@ export function forProject(board: RoadmapBoard, project: string | undefined): Ro
     sessions,
     // An agent belongs to the project its session worked in when it started, wherever the session went since.
     agents: board.agents.filter(a => (a.project ? a.project === project : ids.has(a.session))),
+    scope: project,
     elsewhere: Object.fromEntries(board.tracks.filter(t => t.project && t.project !== project).map(t => [t.name, name(t.project!)])),
   }
+}
+
+/** Whether a session works in the project a board shows now (a narrowed board keeps chats that moved on, for history). */
+export function workingIn(board: RoadmapBoard, s: RoadmapSession): boolean {
+  return !board.scope || !s.project || s.project === board.scope
 }
 
 /**
@@ -1106,7 +1114,11 @@ export function days(board: RoadmapBoard, now: number, offsetMin: number, limit 
       }
     }
   }
-  for (const s of board.sessions) add(s.startedAt, { kind: 'session', text: s.title, track: s.track })
+  // A session's start belongs to the project it started in.
+  for (const s of board.sessions) {
+    const began = s.startProject ?? s.project
+    if (!board.scope || !began || began === board.scope) add(s.startedAt, { kind: 'session', text: s.title, track: s.track })
+  }
   for (const a of board.agents) add(a.startedAt, { kind: 'agent', text: a.description, track: a.track })
   return [...byDay]
     .sort((a, b) => b[0] - a[0])

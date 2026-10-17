@@ -255,6 +255,8 @@ export type RoadmapSession = {
   focus?: string
   /** The project this session works in. */
   project?: string
+  /** The project it worked in when it started: where its start belongs in history. */
+  startProject?: string
 }
 
 export type RoadmapAgent = {
@@ -292,6 +294,8 @@ export type RoadmapBoard = {
   projects: RoadmapProject[]
   /** On a board narrowed to one project: each track left out, by name → its project's name. */
   elsewhere?: Record<string, string>
+  /** The project a narrowed board shows (absent: every project). */
+  scope?: string
   at: number
 }
 

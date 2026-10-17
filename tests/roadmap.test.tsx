@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, forProject, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1916,7 +1916,8 @@ test('projects, second round: who works where stays in its project; external lin
   // Round two. A session that moved to another repository is shown where it works now (its live file).
   const moved = fold(events, [{ session: 'a', title: 'chat a', at: 9990, agents: [], project: '/repos/web', activity: 'Edit: x.ts' }], 9999)
   expect(forProject(moved, '/repos/web').sessions.map(s => s.id)).toContain('a')
-  expect(forProject(moved, '/repos/api').sessions.map(s => s.id)).not.toContain('a')
+  const apiNow = forProject(moved, '/repos/api')
+  expect(apiNow.sessions.filter(s => workingIn(apiNow, s)).map(s => s.id)).not.toContain('a')
   // A made-up name never meets a real folder's name.
   const odd = fold([plan(1, 'a', '/x/a'), plan(2, 'b', '/y/a'), plan(3, 'c', '/z/a (x)')], [], 9)
   expect(new Set(odd.projects.map(p => p.name)).size).toBe(3)
@@ -1954,8 +1955,16 @@ test('projects, third round: a session that moves keeps its past where it happen
   expect(forProject(board, '/repos/a').agents.map(a => a.id)).toEqual(['ga'])
   expect(forProject(board, '/repos/b').agents.map(a => a.id)).toEqual([])
   expect(days(forProject(board, '/repos/a'), 99, 0).flatMap(d => d.entries).some(e => e.kind === 'agent')).toBe(true)
-  // The session itself is in B now.
-  expect(forProject(board, '/repos/b').sessions.map(s => s.id)).toEqual(['m'])
+  // The session itself works in B now; its start stays in A's history (Days), not B's.
+  const inB = forProject(board, '/repos/b')
+  const inA = forProject(board, '/repos/a')
+  expect(inB.sessions.filter(s => workingIn(inB, s)).map(s => s.id)).toEqual(['m'])
+  expect(inA.sessions.filter(s => workingIn(inA, s)).map(s => s.id)).not.toContain('m')
+  expect(days(inA, 99, 0).flatMap(d => d.entries).some(e => e.kind === 'session' && e.text === 'chat m')).toBe(true)
+  expect(days(inB, 99, 0).flatMap(d => d.entries).some(e => e.kind === 'session' && e.text === 'chat m')).toBe(false)
+  // Work written in the same millisecond as the session's word for B is B's.
+  const sameMs = fold([...history, session(30, 'm', '/repos/c'), plan(30, 'ops', 'm')], [], 99)
+  expect(sameMs.tracks.find(t => t.name === 'ops')?.project).toBe('/repos/c')
   // 3. A live file older than the session's move does not pull it back.
   const stale = fold([...history, agent(12, 'gb')], [{ session: 'm', title: 'chat m', at: 5, agents: [], project: '/repos/a' }], 99)
   expect(stale.sessions.find(s => s.id === 'm')?.project).toBe('/repos/b')
@@ -2025,6 +2034,53 @@ test('the pane keeps a way to every project, shows only its own chats, and offer
   expect(await ui.find({ text: /A chat in api/ })).toBeDefined()
   expect(await ui.find({ text: /waits on api\/1 \(in project api\)/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a chat older than some state keys still draws the pane and the band', async ($, on) => {
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence', review: { required: false } }] }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-old' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  // This chat's state contract predates these keys: reading or writing them is refused.
+  const newer = ['focus', 'phaseOpen', 'editing', 'project', 'outdated']
+  on('state.get', (_$, e: any, next: any) => (newer.includes(e.key) ? { deny: `no state key ${e.key}` } : next(e)))
+  on('state.set', (_$, e: any, next: any) => (newer.includes(e.key) ? { deny: `no state key ${e.key}` } : next(e)))
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /API v2/ })).toBeDefined()
+  expect(await ui.find({ text: /could not draw/ })).toBe(undefined)
+  // Folding a phase and pinning write newer keys: refused quietly, the pane keeps working.
+  await ui.press({ key: 'fold-api' })
+  expect(await ui.find({ text: /Fence/ })).toBeDefined()
+  await ui.unmount()
+  const band = await $.ui.mount({
+    plugin: 'roadmap',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 5 } } as never,
+  })
+  expect(await band.find({ text: /api 0%/ })).toBeDefined()
+  await band.unmount()
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

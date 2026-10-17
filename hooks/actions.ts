@@ -7,6 +7,7 @@
 import type { RoadmapEvent, RoadmapLive, RoadmapPriority, RoadmapReviewPolicy, RoadmapStatus } from '../types'
 import {
   forProject,
+  workingIn,
   policyOf,
   FOLLOW_UPS,
   PRIORITIES,
@@ -438,7 +439,8 @@ export function statusAction(ctx: ActionContext, input: Record<string, unknown> 
   const board = fold(ctx.events, ctx.lives, ctx.now)
   const all = input.all === true || input.all === 'true'
   // Who works where is project context too: other projects' chats stay out unless all is asked.
-  const live = forProject(board, all ? '*' : ctx.project).sessions.filter(s => s.isLive && s.id !== ctx.session)
+  const scoped = forProject(board, all ? '*' : ctx.project)
+  const live = scoped.sessions.filter(s => s.isLive && s.id !== ctx.session && workingIn(scoped, s))
   const others = live.length
     ? `\nOther sessions working now:\n${live
         .map(s => `- ${s.title}${s.focus ? ` [holds ${s.focus}]` : s.track ? ` [${s.track}]` : ''}${s.activity ? ` → ${s.activity}` : ''}`)

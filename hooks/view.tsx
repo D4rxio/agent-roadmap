@@ -1,5 +1,5 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, externalNote, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import { ICONS, PRIORITIES, attention, externalNote, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Els = Record<string, any>
@@ -669,7 +669,7 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
 
 function liveSection(els: Els, d: PaneData) {
   const { Box, Text } = els
-  const sessions = d.board.sessions.filter(s => s.isLive)
+  const sessions = d.board.sessions.filter(s => s.isLive && workingIn(d.board, s))
   const agents = d.board.agents.filter(a => a.status === 'running')
   if (sessions.length + agents.length === 0) return null
   return (

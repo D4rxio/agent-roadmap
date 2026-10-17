@@ -102,6 +102,30 @@ async function readProjectView($: EngineInterface): Promise<string> {
   }
 }
 
+async function readFocus($: EngineInterface): Promise<string> {
+  try {
+    return (await read($, focus)) ?? ''
+  } catch {
+    return journal.focus ?? ''
+  }
+}
+
+async function readPhaseOpen($: EngineInterface): Promise<Record<string, boolean>> {
+  try {
+    return (await read($, phaseOpen)) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+async function readEditing($: EngineInterface): Promise<string> {
+  try {
+    return (await read($, editing)) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 async function readOutdated($: EngineInterface): Promise<boolean> {
   try {
     return (await read($, outdated)) === true
@@ -444,7 +468,7 @@ async function setFocus($: EngineInterface, ref: string) {
   journal.focus = ref || undefined
   journal.track = ref ? ref.split('/')[0] : journal.track
   journal.activeAt = Date.now()
-  await update($, focus, () => ref)
+  await update($, focus, () => ref).catch(() => undefined)
   const track = ref.split('/')[0]
   if (track) await update($, expanded, list => (list.includes(track) ? list : [...list, track]))
   await heartbeat($)
@@ -890,8 +914,8 @@ export const register: Register = on => {
         onView: next => void update($, view, () => next),
         onToggle: track =>
           void update($, expanded, list => (list.includes(track) ? list.filter(n => n !== track) : [...list, track])),
-        phaseOpen: await read($, phaseOpen),
-        onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })),
+        phaseOpen: await readPhaseOpen($),
+        onTogglePhase: (key, open) => void update($, phaseOpen, map => ({ ...map, [key]: open })).catch(() => undefined),
         onCopyTrack: (track, surface) =>
           void (async () => {
             const t = (await read($, board)).tracks.find(x => x.name === track)
@@ -910,14 +934,14 @@ export const register: Register = on => {
             $.ui.toast(done.isCopied ? `⧉ ${text.length > 60 ? `${text.slice(0, 59)}…` : text}` : `Could not copy: ${done.reason}`)
           })(),
         onDecide: (track, id, status) => void decide($, track, id, status),
-        editing: await read($, editing),
-        focus: await read($, focus),
+        editing: await readEditing($),
+        focus: await readFocus($),
         onPin: ref => void setFocus($, ref),
         onSkip: (track, id, reason) => void personSkip($, track, id, reason),
         onMove: (track, id, to, reason) => void personMove($, track, id, to, reason),
         onCycle: (track, id, status) => void personStatus($, track, id, status),
         onAdd: (track, title) => void personAdd($, track, title),
-        onStartEdit: ref => void update($, editing, () => ref),
+        onStartEdit: ref => void update($, editing, () => ref).catch(() => undefined),
         onRename: (track, id, title) => void personEdit($, track, id, { title }),
         onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
         onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
@@ -939,17 +963,30 @@ export const register: Register = on => {
 
   // The pane's toggle, one line above the prompt (`/roadmap band` hides it).
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await read($, showBand))) return next(e)
-    const b = await read($, board)
-    if (b.tracks.length === 0) return next(e)
-    return drawBand($.ui.resolve(e), {
-      // The band speaks for this chat's project.
-      board: forProject(b, journal.project),
-      isOpen: await read($, paneOpen),
-      cols: e.props.bodyColumns,
-      onToggle: () => void togglePane($),
-      focus: await read($, focus),
-      outdated: await readOutdated($),
-    })
+    // Like the pane: a band that cannot draw says so, with its toggle, instead of vanishing.
+    try {
+      if (e.props.hasSurvey || !(await read($, showBand))) return next(e)
+      const b = await read($, board)
+      if (b.tracks.length === 0) return next(e)
+      return drawBand($.ui.resolve(e), {
+        // The band speaks for this chat's project.
+        board: forProject(b, journal.project),
+        isOpen: await read($, paneOpen),
+        cols: e.props.bodyColumns,
+        onToggle: () => void togglePane($),
+        focus: await readFocus($),
+        outdated: await readOutdated($),
+      })
+    } catch {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="row" gap={1}>
+          <Button key="band-toggle" plain variant="primary" onPress={() => void togglePane($)}>
+            Roadmap
+          </Button>
+          <Text color="warning" wrap="truncate-end">↻ could not draw — restart this chat</Text>
+        </Box>
+      )
+    }
   })
 }
