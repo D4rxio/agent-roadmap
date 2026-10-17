@@ -879,6 +879,172 @@ function chainsOf(tracks: Map<string, RoadmapTrack>, sessions: Map<string, Roadm
   }
 }
 
+export type ChainNode = {
+  ref: string
+  track: string
+  id: string
+  title: string
+  status: RoadmapStatus
+  checkpoint: boolean
+  /** The step its track offers to pick up next. */
+  next: boolean
+  /** On the longest chain of open steps. */
+  critical: boolean
+  /** Column, left to right: the longest path of prerequisites before it. */
+  layer: number
+  /** Row within its column. */
+  row: number
+}
+export type ChainEdge = { from: string; to: string; moved: boolean; critical: boolean }
+export type ChainGraph = { nodes: ChainNode[]; edges: ChainEdge[]; layers: number; rows: number }
+
+/**
+ * The dependency graph of a board as boxes and arrows: every step that waits on another or is waited on
+ * (or was moved), an arrow from a prerequisite to what waits on it, a dashed one from a moved step to
+ * where its obligation went. Columns follow the longest path of prerequisites, so a chain reads left to
+ * right; the longest chain of open steps is marked. Sets aside backlog and archived tracks. No time axis.
+ */
+export function chainGraph(board: RoadmapBoard): ChainGraph {
+  // By name, not by recent activity: the same plan always draws (and exports) the same way.
+  const tracks = board.tracks.filter(t => !t.backlog && !t.archived).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const order = new Map(tracks.map((t, i) => [t.name, i]))
+  const steps = new Map<string, { t: RoadmapTrack; s: RoadmapStep; at: number }>()
+  for (const t of tracks) t.steps.forEach((s, i) => { if (!s.backlog) steps.set(`${t.name}/${s.id}`, { t, s, at: i }) })
+  const edges: ChainEdge[] = []
+  // A step waiting on a moved step waits on where its obligation went: the arrow comes from there.
+  const now = (dep: string) => {
+    const m = steps.get(dep)?.s
+    return m?.status === 'moved' && m.movedFinal && steps.has(m.movedFinal) ? m.movedFinal : dep
+  }
+  for (const [ref, { s }] of steps) {
+    for (const dep of new Set(s.blockedBy.map(now))) if (steps.has(dep) && dep !== ref) edges.push({ from: dep, to: ref, moved: false, critical: false })
+    if (s.status === 'moved' && s.movedTo && steps.has(s.movedTo) && s.movedTo !== ref) edges.push({ from: ref, to: s.movedTo, moved: true, critical: false })
+  }
+  const used = new Set(edges.flatMap(e => [e.from, e.to]))
+  const into = new Map<string, string[]>()
+  const out = new Map<string, string[]>()
+  for (const e of edges) {
+    into.set(e.to, [...(into.get(e.to) ?? []), e.from])
+    out.set(e.from, [...(out.get(e.from) ?? []), e.to])
+  }
+  // Column: the longest path of prerequisites; a loop written by hand stops the walk instead of hanging it.
+  const layer = new Map<string, number>()
+  const place = (ref: string, path: Set<string>): number => {
+    if (layer.has(ref)) return layer.get(ref)!
+    if (path.has(ref)) return 0
+    path.add(ref)
+    const l = Math.max(-1, ...(into.get(ref) ?? []).map(r => place(r, path))) + 1
+    path.delete(ref)
+    layer.set(ref, l)
+    return l
+  }
+  for (const ref of used) place(ref, new Set())
+  // The longest chain of open steps: from the open step with the deepest run of open steps after it.
+  const open = (ref: string) => {
+    const x = steps.get(ref)?.s
+    return !!x && OPEN.includes(x.status)
+  }
+  const depth = new Map<string, number>()
+  const deep = (ref: string, path: Set<string>): number => {
+    if (depth.has(ref)) return depth.get(ref)!
+    if (path.has(ref) || !open(ref)) return 0
+    path.add(ref)
+    const d = 1 + Math.max(0, ...(out.get(ref) ?? []).map(r => deep(r, path)))
+    path.delete(ref)
+    depth.set(ref, d)
+    return d
+  }
+  const byPlace = (a: string, b: string) => {
+    const x = steps.get(a)!
+    const y = steps.get(b)!
+    return (order.get(x.t.name) ?? 0) - (order.get(y.t.name) ?? 0) || x.at - y.at
+  }
+  const refs = [...used].sort(byPlace)
+  const critical = new Set<string>()
+  let head = refs.filter(open).sort((a, b) => deep(b, new Set()) - deep(a, new Set()) || byPlace(a, b))[0]
+  if (head && deep(head, new Set()) > 1) {
+    while (head && !critical.has(head)) {
+      critical.add(head)
+      const nextOpen: string[] = (out.get(head) ?? []).filter(open).sort((a, b) => deep(b, new Set()) - deep(a, new Set()) || byPlace(a, b))
+      head = nextOpen[0]
+    }
+  }
+  for (const e of edges) e.critical = critical.has(e.from) && critical.has(e.to) && !e.moved
+  const rowsIn = new Map<number, number>()
+  const nodes: ChainNode[] = refs.map(ref => {
+    const { t, s } = steps.get(ref)!
+    const l = layer.get(ref) ?? 0
+    const row = rowsIn.get(l) ?? 0
+    rowsIn.set(l, row + 1)
+    return { ref, track: t.name, id: s.id, title: s.title, status: s.status, checkpoint: s.checkpoint, next: t.next === ref, critical: critical.has(ref), layer: l, row }
+  })
+  edges.sort((a, b) => byPlace(a.from, b.from) || byPlace(a.to, b.to))
+  return { nodes, edges, layers: Math.max(0, ...nodes.map(n => n.layer + 1)), rows: Math.max(0, ...rowsIn.values()) }
+}
+
+/** A node id Mermaid accepts, stable for the same step: letters, digits and underscores only. */
+function mermaidId(ref: string): string {
+  return 's_' + [...ref].map(c => (/[A-Za-z0-9]/.test(c) ? c : `_${c.charCodeAt(0).toString(16)}_`)).join('')
+}
+
+/**
+ * The graph as a Mermaid flowchart, for a commit, a .md document, a PR or an issue (GitHub, GitLab and
+ * Gitea render it). The same board always gives the same text, so a diff shows only what changed.
+ */
+export function mermaidOf(g: ChainGraph, opts: { fence?: boolean } = {}): string {
+  const label = (n: ChainNode) => `${ICONS[n.status]} ${n.ref} ${n.title}`.replace(/"/g, '#quot;').replace(/[\r\n]+/g, ' ')
+  const lines = ['flowchart LR']
+  if (g.nodes.length === 0) lines.push('  empty["no dependencies between steps yet"]')
+  for (const n of g.nodes) {
+    const id = mermaidId(n.ref)
+    // A checkpoint is the person's to close: a hexagon.
+    lines.push(`  ${id}${n.checkpoint ? `{{"${label(n)}"}}` : `["${label(n)}"]`}:::${n.status}`)
+  }
+  for (const e of g.edges) lines.push(`  ${mermaidId(e.from)} ${e.moved ? '-.->|moved|' : e.critical ? '==>' : '-->'} ${mermaidId(e.to)}`)
+  const nexts = g.nodes.filter(n => n.next).map(n => mermaidId(n.ref))
+  if (nexts.length) lines.push(`  class ${nexts.join(',')} next`)
+  lines.push(
+    '  classDef done fill:#d8f3dc,stroke:#3fb950,color:#1f2328',
+    '  classDef running fill:#fff1c2,stroke:#d29922,color:#1f2328',
+    '  classDef awaiting fill:#dbeafe,stroke:#58a6ff,color:#1f2328',
+    '  classDef blocked fill:#eceff1,stroke:#8b949e,color:#1f2328,stroke-dasharray:4 3',
+    '  classDef failed fill:#fde2e1,stroke:#e5534b,color:#1f2328',
+    '  classDef todo fill:#ffffff,stroke:#8b949e,color:#1f2328',
+    '  classDef skipped fill:#f6f8fa,stroke:#d0d7de,color:#57606a',
+    '  classDef moved fill:#f6f8fa,stroke:#d0d7de,color:#57606a,stroke-dasharray:2 2',
+    '  classDef next stroke-width:3px',
+  )
+  const body = lines.join('\n')
+  return opts.fence === false ? body : '```mermaid\n' + body + '\n```'
+}
+
+/** The graph as plain text, for a terminal: each chain from where it starts, one arrow per step. */
+export function chainText(g: ChainGraph): string[] {
+  if (g.nodes.length === 0) return []
+  const node = new Map(g.nodes.map(n => [n.ref, n]))
+  const kids = new Map<string, ChainEdge[]>()
+  for (const e of g.edges) kids.set(e.from, [...(kids.get(e.from) ?? []), e])
+  const hasParent = new Set(g.edges.map(e => e.to))
+  const lines: string[] = []
+  const seen = new Set<string>()
+  const walk = (ref: string, indent: string, via?: ChainEdge) => {
+    const n = node.get(ref)!
+    const arrow = via ? (via.moved ? '↪ ' : '→ ') : ''
+    const marks = `${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`
+    if (seen.has(ref)) {
+      lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} (above)`)
+      return
+    }
+    seen.add(ref)
+    lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} ${n.title}${marks}`)
+    for (const e of kids.get(ref) ?? []) walk(e.to, indent + '   ', e)
+  }
+  for (const n of g.nodes) if (!hasParent.has(n.ref)) walk(n.ref, '')
+  // A loop has no start: begin it at its first step.
+  for (const n of g.nodes) if (!seen.has(n.ref)) walk(n.ref, '')
+  return lines
+}
+
 export function byPriority(a: RoadmapStep, b: RoadmapStep): number {
   const rank = (s: RoadmapStep) => (s.priority ? PRIORITIES.indexOf(s.priority) : PRIORITIES.length)
   return rank(a) - rank(b)

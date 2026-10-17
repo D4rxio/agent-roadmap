@@ -9,6 +9,8 @@
 //   roadmap step <track>/<id>           a step's brief: why, scope, done when, waits on, unblocks
 //   roadmap json                        the whole folded board as JSON, for analysis
 //   roadmap md [track] [--all]          this project's roadmap (or one track) as Markdown
+//   roadmap mermaid [track] [--all] [--out file.md]
+//                                       what waits on what, as a Mermaid flowchart (GitHub/GitLab render it)
 //   roadmap plan <track> <file|->       lay out a track from JSON {title?, phases:[{name, steps:[…]}]}
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
 //                                       status: todo running done failed blocked skipped moved
@@ -240,6 +242,21 @@ switch (command) {
       fail(other ? `track "${args[0]}" is in project ${shown.elsewhere?.[args[0]] ?? 'another'}; add --all to print it here` : `no track "${args[0]}"`)
     }
     process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset, shown) : model.boardMarkdown(shown, Date.now(), offset)) + '\n')
+    break
+  }
+  case 'mermaid': {
+    const { b } = board()
+    const shown = model.forProject(b, yes(flags.all) ? '*' : projectKey)
+    if (args[0] && !shown.tracks.some(x => x.name === args[0])) fail(`no track "${args[0]}" in this project (--all for every project)`)
+    // One track: its steps, and the steps elsewhere they wait on or that wait on them.
+    const g = model.chainGraph(shown)
+    const keep = args[0] ? new Set(g.edges.filter(e => e.from.startsWith(`${args[0]}/`) || e.to.startsWith(`${args[0]}/`)).flatMap(e => [e.from, e.to])) : undefined
+    const picked = keep ? { ...g, nodes: g.nodes.filter(n => keep.has(n.ref)), edges: g.edges.filter(e => keep.has(e.from) && keep.has(e.to)) } : g
+    const text = model.mermaidOf(picked) + '\n'
+    if (flags.out && flags.out !== 'true') {
+      writeFileSync(String(flags.out), text)
+      process.stdout.write(`wrote ${flags.out}\n`)
+    } else process.stdout.write(text)
     break
   }
   case 'plan': {

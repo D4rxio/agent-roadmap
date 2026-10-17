@@ -87,6 +87,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
   - **⧉ Copy as Markdown** copies one track.
 - **Days.** Steps done per day over the last two weeks, and what happened each day: done, started,
   sessions, agents.
+- **Chains.** What waits on what, as boxes and arrows read left to right, across tracks: each step in its
+  status colours, the next step outlined, the longest open chain in bold, a moved step's arrow dashed (a
+  text tree in the terminal). No dates, no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
+  ```` ```mermaid ```` block that GitHub, GitLab and Gitea render — paste it into a PR, an issue or a doc.
 - **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
   **↺ Unarchive**.
 - **Projects.** Tracks belong to the repository they were laid out from (worktrees count as one). The
@@ -143,6 +147,7 @@ node cli/roadmap.mjs plan api plan.json     # lay out a track from JSON
 node cli/roadmap.mjs mark api/2.1 running
 node cli/roadmap.mjs done api/2.1 --shipped "…" --evidence "…" --follow-up "title:P2"
 node cli/roadmap.mjs review api/2.1 --verdict pass --evidence "…"
+node cli/roadmap.mjs mermaid --out docs/roadmap.md   # what waits on what, as a Mermaid diagram
 node cli/roadmap.mjs mark api/1 moved --to api/2 --reason "…"
 ```
 

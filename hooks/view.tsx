@@ -1,10 +1,11 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, externalNote, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import type { ChainGraph } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Els = Record<string, any>
 
-export type RoadmapView = 'tracks' | 'days' | 'backlog'
+export type RoadmapView = 'tracks' | 'days' | 'backlog' | 'chains'
 
 export type PaneData = {
   /** The board for the project shown (its tracks and those not placed in any); `projects` lists them all. */
@@ -202,6 +203,98 @@ export function progressSvg(steps: RoadmapStep[]): string {
 }
 
 /** Steps finished per day, oldest first; today's bar is the brightest. */
+const NODE_FILL: Record<RoadmapStatus, [string, string]> = {
+  done: ['#d8f3dc', '#3fb950'],
+  running: ['#fff1c2', '#d29922'],
+  awaiting: ['#dbeafe', '#58a6ff'],
+  blocked: ['#eceff1', '#8b949e'],
+  failed: ['#fde2e1', '#e5534b'],
+  todo: ['#ffffff', '#8b949e'],
+  skipped: ['#f6f8fa', '#d0d7de'],
+  moved: ['#f6f8fa', '#d0d7de'],
+}
+
+const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * The chain graph drawn as boxes and arrows: columns left to right, a box per step in its status colours
+ * (its own fill, so it reads on a light and a dark page), the next step outlined, the longest open chain
+ * in bold arrows, a moved step's arrow dashed.
+ */
+export function chainSvg(g: ChainGraph): { svg: string; width: number; height: number } {
+  const [W, H, GX, GY, PAD] = [178, 42, 46, 14, 8]
+  const width = PAD * 2 + g.layers * W + Math.max(0, g.layers - 1) * GX
+  const height = PAD * 2 + g.rows * H + Math.max(0, g.rows - 1) * GY
+  const at = new Map(g.nodes.map(n => [n.ref, { x: PAD + n.layer * (W + GX), y: PAD + n.row * (H + GY) }]))
+  const cut = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
+  const arrows = g.edges.map(e => {
+    const a = at.get(e.from)!
+    const b = at.get(e.to)!
+    const [x1, y1, x2, y2] = [a.x + W, a.y + H / 2, b.x, b.y + H / 2]
+    const mid = (x1 + x2) / 2
+    return (
+      `<path d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 6},${y2}" fill="none" stroke="${e.critical ? '#d29922' : '#8b949e'}" ` +
+      `stroke-width="${e.critical ? 2.5 : 1.3}"${e.moved ? ' stroke-dasharray="4 3"' : ''} marker-end="url(#arrow)"/>`
+    )
+  })
+  const boxes = g.nodes.map(n => {
+    const { x, y } = at.get(n.ref)!
+    const [fill, stroke] = NODE_FILL[n.status]
+    const faded = n.status === 'skipped' || n.status === 'moved' ? ' opacity="0.75"' : ''
+    return (
+      `<g${faded}><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="${n.checkpoint ? 12 : 6}" fill="${fill}" ` +
+      `stroke="${n.next ? '#58a6ff' : stroke}" stroke-width="${n.next ? 3 : 1.2}"/>` +
+      `<text x="${x + 8}" y="${y + 15}" font-size="10" fill="#57606a">${esc(`${ICONS[n.status]} ${n.ref}${n.next ? '  ▸ next' : ''}${n.critical ? '  ★' : ''}`)}</text>` +
+      `<text x="${x + 8}" y="${y + 32}" font-size="12" fill="#1f2328">${esc(cut(n.title, 26))}</text></g>`
+    )
+  })
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" ` +
+    `font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">` +
+    `<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">` +
+    `<path d="M0,0 L8,4 L0,8 z" fill="#8b949e"/></marker></defs>${arrows.join('')}${boxes.join('')}</svg>`
+  return { svg, width, height }
+}
+
+function chainsView(els: Els, d: PaneData) {
+  const { Box, Text, Svg } = els
+  const g = chainGraph(d.board)
+  const mermaid = mermaidOf(g)
+  return (
+    <Box key="chains" flexDirection="column">
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor wrap="truncate-end">
+          What waits on what: ▸ next · ★ longest open chain · dashed: moved
+        </Text>
+        <Box flexGrow={1} />
+        {Btn(
+          els,
+          d,
+          { key: 'copy-mermaid', plain: true, onPress: (press: any) => d.onCopyText(mermaid, press?.surface ?? 'desktop') },
+          '⧉ Copy as Mermaid',
+          <Text><Text color="suggestion">⧉ Copy as Mermaid</Text></Text>,
+        )}
+      </Box>
+      {g.nodes.length === 0 ? (
+        <Text dimColor>No step waits on another yet. Plans give steps blocked_by; moves show here too.</Text>
+      ) : d.canDraw && Svg ? (
+        (() => {
+          const drawn = chainSvg(g)
+          // Scaled to the pane's width (about 8 px a column), so a wide graph leaves no empty band below it.
+          const fit = Math.min(1, (Math.max(20, d.cols) * 8) / drawn.width)
+          return <Svg key="chain-graph" source={drawn.svg} alt="the roadmap's chains of steps" height={Math.max(40, Math.round(drawn.height * fit))} />
+        })()
+      ) : (
+        chainText(g).map((line, i) => (
+          <Text key={`chain-${i}`} wrap="truncate-end">
+            {line}
+          </Text>
+        ))
+      )}
+    </Box>
+  )
+}
+
 export function sparkSvg(series: number[]): string {
   const max = Math.max(1, ...series)
   const w = 1000 / series.length
@@ -314,6 +407,7 @@ function header(els: Els, d: PaneData) {
       <Text bold>Roadmap</Text>
       {tab('tracks', 'Tracks')}
       {tab('days', 'Days')}
+      {tab('chains', 'Chains')}
       {tab(
         'backlog',
         `Backlog ${d.board.tracks.filter(t => t.backlog || t.archived).length + d.board.tracks.filter(t => !t.archived).flatMap(t => t.steps).filter(x => x.backlog).length}`,
@@ -846,6 +940,8 @@ export function drawPane(els: Els, d: PaneData) {
       {needsYou(els, d)}
       {d.view === 'days'
         ? daysView(els, d)
+        : d.view === 'chains'
+          ? chainsView(els, d)
         : d.view === 'backlog'
           ? backlogView(els, d)
           : d.board.tracks

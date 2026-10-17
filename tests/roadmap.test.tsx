@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, forProject, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -2170,6 +2170,96 @@ test('the Tracks view marks the next step, what each step unblocks, and the long
     expect(await ui.find({ text: /Schema/ })).toBeDefined()
     expect(await ui.find({ text: /⇢2/ })).toBeDefined()
     expect(await ui.find({ text: /⇢1/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('the chain graph: boxes and arrows left to right, moves dashed, the longest open chain marked; Mermaid out', async () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, steps: object[]) => ({ kind: 'plan', at, session: 's', track, phases: [{ name: 'P', steps: steps.map(x => ({ review: off, ...x })) }] }) as RoadmapEvent
+  const word = (at: number, track: string, id: string, status: string, extra: object = {}) =>
+    ({ kind: 'step', at, session: 'p', track, id, status, origin: 'person', actor: 'person', ...extra }) as RoadmapEvent
+  const events = [
+    plan(1, 'api', [{ id: '1', title: 'Pagination' }, { id: '2', title: 'One "error" format', blockedBy: ['1'] }, { id: '3', title: 'Load test', blockedBy: ['2'], checkpoint: true }, { id: '9', title: 'Alone' }]),
+    plan(2, 'web', [{ id: '1', title: 'Billing', blockedBy: ['api/2'] }, { id: '2', title: 'Old view' }, { id: '3', title: 'Export', blockedBy: ['2'] }]),
+    word(3, 'api', '1', 'done'),
+    word(4, 'web', '2', 'moved', { movedTo: 'web/1', reason: 'r' }),
+  ]
+  const g = chainGraph(fold(events, [], 99))
+  // Only steps in some chain; a step alone stays out.
+  expect(g.nodes.map(n => n.ref)).toEqual(['api/1', 'api/2', 'api/3', 'web/1', 'web/2', 'web/3'])
+  const col = (ref: string) => g.nodes.find(n => n.ref === ref)!.layer
+  expect([col('api/1'), col('api/2'), col('api/3'), col('web/1'), col('web/3')]).toEqual([0, 1, 2, 2, 3])
+  // A move is a dashed arrow to where it went; what waited on the moved step now hangs off the target.
+  expect(g.edges.filter(e => e.moved).map(e => `${e.from}->${e.to}`)).toEqual(['web/2->web/1'])
+  expect(g.edges.some(e => e.to === 'web/3' && e.from === 'web/1')).toBe(true)
+  expect(g.edges.some(e => e.to === 'web/3' && e.from === 'web/2')).toBe(false)
+  // The longest open chain: api/2 → web/1 → web/3 (three open steps), not through the done api/1.
+  expect(g.nodes.filter(n => n.critical).map(n => n.ref)).toEqual(['api/2', 'web/1', 'web/3'])
+  // Mermaid: valid ids, quotes escaped, a checkpoint as a hexagon, the same text however the board is read.
+  const m = mermaidOf(g)
+  expect(m.startsWith('```mermaid\nflowchart LR\n')).toBe(true)
+  expect(m).toContain('One #quot;error#quot; format')
+  expect(m).toContain('s_api_2f_3{{"⊘ api/3 Load test"}}:::blocked')
+  expect(m).toContain('s_web_2f_2 -.->|moved| s_web_2f_1')
+  for (const line of m.split('\n').filter(l => /^\s+s_/.test(l))) expect(/^\s+s_[A-Za-z0-9_]+/.test(line)).toBe(true)
+  expect(mermaidOf(chainGraph(fold([...events].reverse(), [], 99)))).toBe(m)
+  expect(mermaidOf(chainGraph(fold([...events, word(5, 'web', '1', 'running')], [], 99))).split('\n').length).toBe(m.split('\n').length)
+  // A terminal gets the same as text; a loop written by hand does not hang it.
+  expect(chainText(g)).toEqual([
+    '✓ api/1 Pagination',
+    '   → ○ api/2 One "error" format  ▸ next  ★',
+    '      → ⊘ api/3 Load test',
+    '      → ⊘ web/1 Billing  ★',
+    '         → ⊘ web/3 Export  ★',
+    '↪ web/2 Old view',
+    '   ↪ ⊘ web/1 (above)',
+  ])
+  const loop = chainGraph(fold([plan(1, 'x', [{ id: '1', title: 'One', blockedBy: ['2'] }, { id: '2', title: 'Two', blockedBy: ['1'] }])], [], 9))
+  expect(chainText(loop).length).toBeGreaterThan(0)
+  // Nothing waits on anything: an empty graph says so in Mermaid too.
+  expect(mermaidOf(chainGraph(fold([plan(1, 'z', [{ id: '1', title: 'Solo' }])], [], 9)))).toContain('no dependencies between steps yet')
+})
+
+test('the Chains tab draws the graph (a text tree in the terminal) and copies it as Mermaid', async ($, on) => {
+  const off = { required: false }
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [
+    { id: '1', title: 'Schema', review: off }, { id: '2', title: 'Client', blockedBy: ['1'], review: off },
+  ] }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({ value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })) }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-chains' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  const copied: string[] = []
+  on('ui.copy', (_$, e) => {
+    copied.push((e as { text: string }).text)
+    return { value: { isCopied: true } }
+  })
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'view-chains' })
+    expect(await ui.find({ text: /Copy as Mermaid/ })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ text: /→ ⊘ api\/2 Client/ })).toBeDefined()
+    await ui.press({ key: 'copy-mermaid' })
+    expect(copied.pop()).toContain('s_api_2f_1 ==> s_api_2f_2')
+    await ui.press({ key: 'view-tracks' })
     await ui.unmount()
   }
 })
