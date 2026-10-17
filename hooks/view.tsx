@@ -312,45 +312,36 @@ function chainsView(els: Els, d: PaneData) {
   const title = (name: string) => d.board.tracks.find(t => t.name === name)?.title ?? name
   return (
     <Box key="chains" flexDirection="column">
+      {/* Which track: the one shown stands out, the others step back. */}
       {tracks.length > 1 ? (
-        <Box key="chain-tracks" flexDirection="row" gap={1} flexWrap="wrap" marginBottom={1}>
-          {tracks.map((name, i) => (
-            <Button key={`chain-track-${i}`} plain variant={name === track ? 'primary' : undefined} onPress={() => d.onChainTrack?.(name)}>
-              {name === track ? `[${name}]` : ` ${name} `}
-            </Button>
-          ))}
+        <Box key="chain-tracks" flexDirection="row" gap={2} flexWrap="wrap" marginBottom={1}>
+          {tracks.map((name, i) =>
+            Btn(
+              els,
+              d,
+              { key: `chain-track-${i}`, plain: true, onPress: () => d.onChainTrack?.(name) },
+              name === track ? `[${name}]` : name,
+              name === track ? <Text><Text bold>{name}</Text></Text> : <Text><Text dimColor>{name}</Text></Text>,
+            ),
+          )}
         </Box>
       ) : null}
-      <Box flexDirection="row" gap={1}>
+      {/* The track's title is what this view is about; its actions are secondary. */}
+      <Box flexDirection="row" gap={2}>
         <Text bold wrap="truncate-end">
           {track ? title(track) : 'Chains'}
         </Text>
         <Box flexGrow={1} />
         {d.onWide && !d.wide && d.canDraw
-          ? Btn(els, d, { key: 'chain-wide', plain: true, onPress: () => d.onWide?.() }, '⤢ Wide', <Text><Text color="suggestion">⤢ Wide</Text></Text>)
+          ? Btn(els, d, { key: 'chain-wide', plain: true, onPress: () => d.onWide?.() }, '⤢ Wide', <Text><Text dimColor>⤢ Wide</Text></Text>)
           : null}
         {Btn(
           els,
           d,
           { key: 'copy-mermaid', plain: true, onPress: (press: any) => d.onCopyText(mermaid, press?.surface ?? 'desktop') },
           '⧉ Copy as Mermaid',
-          <Text><Text color="suggestion">⧉ Copy as Mermaid</Text></Text>,
+          <Text><Text dimColor>⧉ Copy as Mermaid</Text></Text>,
         )}
-      </Box>
-      <Box flexDirection="row" gap={1}>
-        <Text dimColor wrap="truncate-end">
-          {`● this chat · ▸ next · ★ longest open chain · dashed: moved or another track${!d.chainDone && g.hidden ? ` · ${g.hidden} done step${g.hidden === 1 ? '' : 's'} hidden` : ''}`}
-        </Text>
-        <Box flexGrow={1} />
-        {folded
-          ? Btn(
-              els,
-              d,
-              { key: 'chain-done', plain: true, onPress: () => d.onChainDone?.(!d.chainDone) },
-              d.chainDone ? 'Hide done' : 'Show done',
-              <Text><Text color="suggestion">{d.chainDone ? 'Hide done' : 'Show done'}</Text></Text>,
-            )
-          : null}
       </Box>
       {(() => {
         // Where this chat stands, in words: in a long chain the box alone is easy to miss.
@@ -362,6 +353,22 @@ function chainsView(els: Els, d: PaneData) {
           { text: `  — level ${here.layer + 1} of ${g.layers}`, dim: true },
         ])
       })()}
+      {/* The key, quietly, with the one toggle it needs. */}
+      <Box flexDirection="row" gap={2} marginBottom={1}>
+        <Text dimColor wrap="truncate-end">
+          {`▸ next · ★ longest · dashed: moved, other track${!d.chainDone && g.hidden ? ` · ${g.hidden} done hidden` : ''}`}
+        </Text>
+        <Box flexGrow={1} />
+        {folded
+          ? Btn(
+              els,
+              d,
+              { key: 'chain-done', plain: true, onPress: () => d.onChainDone?.(!d.chainDone) },
+              d.chainDone ? 'Hide done' : 'Show done',
+              <Text><Text dimColor>{d.chainDone ? 'Hide done' : 'Show done'}</Text></Text>,
+            )
+          : null}
+      </Box>
       {g.nodes.length === 0 && folded ? (
         // Everything in this track's chains is finished: say so, rather than that nothing waits on anything.
         <Text dimColor>{`Every step in this track's chains is done (${folded}). Show done draws them.`}</Text>
@@ -493,14 +500,16 @@ function header(els: Els, d: PaneData) {
   const picker =
     d.onProjectView && (projects.length > 1 || (d.project !== undefined && d.project !== (d.here ?? '*'))) ? (
       <Box key="projects" flexDirection="row" gap={1} marginBottom={1}>
-        {projects.map((p, i) => (
-          <Button key={`proj-${i}`} plain variant={d.project === p.key ? 'primary' : undefined} onPress={() => d.onProjectView?.(p.key === d.here ? '' : p.key)}>
-            {d.project === p.key ? `[${p.name}]` : ` ${p.name} `}
-          </Button>
-        ))}
-        <Button key="proj-all" plain variant={d.project === '*' ? 'primary' : undefined} onPress={() => d.onProjectView?.('*')}>
-          {d.project === '*' ? '[All]' : ' All '}
-        </Button>
+        {/* The project shown stands out, the others step back. */}
+        {[...projects.map(p => ({ key: p.key, name: p.name, to: p.key === d.here ? '' : p.key })), { key: '*', name: 'All', to: '*' }].map((p, i, all) =>
+          Btn(
+            els,
+            d,
+            { key: i === all.length - 1 ? 'proj-all' : `proj-${i}`, plain: true, onPress: () => d.onProjectView?.(p.to) },
+            d.project === p.key ? `[${p.name}]` : ` ${p.name} `,
+            d.project === p.key ? <Text><Text bold>{`[${p.name}]`}</Text></Text> : <Text><Text dimColor>{` ${p.name} `}</Text></Text>,
+          ),
+        )}
       </Box>
     ) : null
   return (
@@ -517,9 +526,7 @@ function header(els: Els, d: PaneData) {
       )}
       <Box flexGrow={1} />
       {/* Short, so the tabs never get cut: the whole roadmap (the project shown) as Markdown. */}
-      <Button key="copy-all" plain onPress={(press: any) => d.onCopyAll(press?.surface ?? 'desktop')}>
-        ⧉ Copy
-      </Button>
+      {Btn(els, d, { key: 'copy-all', plain: true, onPress: (press: any) => d.onCopyAll(press?.surface ?? 'desktop') }, '⧉ Copy', <Text><Text dimColor>⧉ Copy</Text></Text>)}
     </Box>
     </Box>
   )
@@ -1022,7 +1029,7 @@ export function drawPane(els: Els, d: PaneData) {
         d,
         { key: 'copy-reload', plain: true, onPress: (press: any) => d.onCopyText(RELOAD, press?.surface ?? 'desktop') },
         'Copy command',
-        <Text><Text color="suggestion">Copy command</Text></Text>,
+        <Text><Text dimColor>Copy command</Text></Text>,
       )}
     </Box>
   ) : null
