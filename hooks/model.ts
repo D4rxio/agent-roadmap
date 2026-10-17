@@ -419,7 +419,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       s.focus = isLive ? live.focus : undefined
       if (live.title) s.title = live.title
       s.track = s.track ?? live.track
-      s.project = s.project ?? live.project
+      // Where it works now: a session can move between repositories (a CLI session id reused elsewhere).
+      s.project = live.project ?? s.project
     } else {
       sessions.set(live.session, {
         id: live.session,
@@ -510,10 +511,15 @@ function projectsOf(tracks: RoadmapTrack[], sessions: RoadmapSession[]): Roadmap
     }
     return key
   }
+  // A folder can itself be called "a (x)", so a made-up name may still meet a real one: those fall back to
+  // their full path, which no two projects share.
+  const named = new Map(keys.map(k => [k, nameOf(k)]))
+  const taken = (k: string) => keys.some(o => o !== k && named.get(o) === named.get(k))
+  for (const k of keys.filter(taken)) named.set(k, k)
   return keys
     .map(key => ({
       key,
-      name: nameOf(key),
+      name: named.get(key) ?? key,
       tracks: tracks.filter(t => t.project === key && !t.archived).length,
       archived: tracks.filter(t => t.project === key && t.archived).length,
     }))
@@ -540,10 +546,18 @@ export function forProject(board: RoadmapBoard, project: string | undefined): Ro
   }
 }
 
-/** " (in project api)" for a reference into a track this board left out, else "". */
-export function externalNote(board: RoadmapBoard, ref: string): string {
-  const name = board.elsewhere?.[ref.split('/')[0] ?? '']
-  return name ? ` (in project ${name})` : ''
+/**
+ * " (in project api)" when `ref` points into a track of another project than `from`'s — whether this board
+ * shows that track (All) or left it out (one project) — else "".
+ */
+export function externalNote(board: RoadmapBoard, ref: string, from?: string): string {
+  const name = ref.split('/')[0] ?? ''
+  const hidden = board.elsewhere?.[name]
+  if (hidden) return ` (in project ${hidden})`
+  const owner = board.tracks.find(t => t.name === name)?.project
+  const here = from === undefined ? undefined : board.tracks.find(t => t.name === from)?.project
+  if (!owner || owner === here) return ''
+  return ` (in project ${board.projects.find(p => p.key === owner)?.name ?? projectLabel(owner)})`
 }
 
 export const ICONS: Record<RoadmapStatus, string> = {
@@ -897,7 +911,7 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
     for (const s of open.slice(0, opts.open ?? 6)) {
       const why =
         s.status === 'blocked'
-          ? ` (blocked by ${s.blockedBy.map(r => `${r}${externalNote(board, r)}`).join(', ')})`
+          ? ` (blocked by ${s.blockedBy.map(r => `${r}${externalNote(board, r, t.name)}`).join(', ')})`
           : s.status === 'awaiting'
             ? s.proposed === 'skipped'
               ? ` (a skip awaits the person: ${s.skipReason ?? 'no reason'})`
@@ -1099,7 +1113,7 @@ export function doneSeries(board: RoadmapBoard, now: number, offsetMin: number, 
 
 // ── Copy: a track as Markdown ────────────────────────────────────────────
 
-export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: number): string {
+export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: number, board?: RoadmapBoard): string {
   const { done, total } = progress(track)
   const lines = [`## ${track.title} — ${total ? Math.round((done / total) * 100) : 0}% (${done}/${total})`, '']
   for (const p of track.phases) {
@@ -1120,7 +1134,7 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
         s.carries?.length ? `also answers for ${s.carries.join(', ')}` : '',
         s.checkpoint ? 'checkpoint' : '',
         s.addedBy ? 'added by you' : '',
-        s.status === 'blocked' ? `waits on ${s.blockedBy.join(', ')}` : '',
+        s.status === 'blocked' ? `waits on ${s.blockedBy.map(r => `${r}${board ? externalNote(board, r, track.name) : ''}`).join(', ')}` : '',
         s.evidence ?? '',
         s.note ?? '',
         s.lastAt && s.status !== 'todo' ? when(s.lastAt, now, offsetMin) : '',
@@ -1146,5 +1160,5 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
 }
 
 export function boardMarkdown(board: RoadmapBoard, now: number, offsetMin: number): string {
-  return board.tracks.filter(t => !t.archived).map(t => trackMarkdown(t, now, offsetMin)).join('\n\n')
+  return board.tracks.filter(t => !t.archived).map(t => trackMarkdown(t, now, offsetMin, board)).join('\n\n')
 }

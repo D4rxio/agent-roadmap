@@ -876,7 +876,7 @@ export const register: Register = on => {
         void (async () => {
           const t = (await read($, board)).tracks.find(x => x.name === track)
           if (!t) return
-          const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz), surface: surface as never })
+          const done = await $.ui.copy({ text: trackMarkdown(t, Date.now(), tz, await read($, board)), surface: surface as never })
           $.ui.toast(done.isCopied ? `⧉ ${t.title} copied` : `Could not copy: ${done.reason}`)
         })(),
       onCopyAll: surface =>

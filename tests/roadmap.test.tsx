@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, forProject, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1913,6 +1913,17 @@ test('projects, second round: who works where stays in its project; external lin
   // Names stay unique however deep the clash goes.
   const deep = fold([plan(1, 'a', '/x/group/api'), plan(2, 'b', '/y/group/api'), plan(3, 'c', '/z/other/api')], [], 9)
   expect(deep.projects.map(p => p.name)).toEqual(['api (other)', 'api (x/group)', 'api (y/group)'])
+  // Round two. A session that moved to another repository is shown where it works now (its live file).
+  const moved = fold(events, [{ session: 'a', title: 'chat a', at: 9990, agents: [], project: '/repos/web', activity: 'Edit: x.ts' }], 9999)
+  expect(forProject(moved, '/repos/web').sessions.map(s => s.id)).toContain('a')
+  expect(forProject(moved, '/repos/api').sessions.map(s => s.id)).not.toContain('a')
+  // A made-up name never meets a real folder's name.
+  const odd = fold([plan(1, 'a', '/x/a'), plan(2, 'b', '/y/a'), plan(3, 'c', '/z/a (x)')], [], 9)
+  expect(new Set(odd.projects.map(p => p.name)).size).toBe(3)
+  // The external mark holds in All and in Markdown too, not only in a narrowed view.
+  expect(summary(whole, { project: '*' })).toContain('(blocked by api/1 (in project api))')
+  expect(boardMarkdown(whole, 9999, 0)).toContain('waits on api/1 (in project api)')
+  expect(boardMarkdown(forProject(whole, '/repos/web'), 9999, 0)).toContain('waits on api/1 (in project api)')
   // Two moves confirmed at once into a loop end nowhere: the person is shown it, to undo one.
   const loop = fold(
     [
@@ -1981,9 +1992,10 @@ test('the pane keeps a way to every project, shows only its own chats, and offer
   // A dependency into another project says so.
   await ui.press({ key: 'fold-web' })
   expect(await ui.find({ text: /waits on api\/1 \(in project api\)/ })).toBeDefined()
-  // All shows the other chat.
+  // All shows the other chat, and the dependency still says it lies in another project.
   await ui.press({ key: 'proj-all' })
   expect(await ui.find({ text: /A chat in api/ })).toBeDefined()
+  expect(await ui.find({ text: /waits on api\/1 \(in project api\)/ })).toBeDefined()
   await ui.unmount()
 })
 

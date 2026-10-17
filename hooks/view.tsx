@@ -224,7 +224,7 @@ function sparkText(series: number[]): string {
 }
 
 function stepRight(s: RoadmapStep, d: PaneData): string {
-  if (s.status === 'blocked') return `waits on ${s.blockedBy.map(r => `${r}${externalNote(d.board, r)}`).join(', ')}`
+  if (s.status === 'blocked') return `waits on ${s.blockedBy.map(r => `${r}${externalNote(d.board, r, s.track)}`).join(', ')}`
   if (s.status === 'done') return s.endedAt ? when(s.endedAt, d.now, d.tz) : ''
   if (s.status === 'running' && s.stale) return `stale · nobody on it since ${s.lastAt ? when(s.lastAt, d.now, d.tz) : 'long ago'}`
   if (s.status === 'running') return s.startedAt ? `for ${duration(d.now - s.startedAt)}` : 'running'

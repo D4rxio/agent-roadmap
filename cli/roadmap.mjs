@@ -45,6 +45,8 @@ for (let i = 0; i < argv.length; i++) {
   } else rest.push(a)
 }
 const [command, ...args] = rest
+/** A yes/no flag: `--x` or `--x true` is yes; `--x false` (or any other word) is no. */
+const yes = v => v === true || String(v) === 'true'
 
 const DIR = process.env.CLAUDE_ROADMAP_DIR || join(homedir(), '.claude', 'roadmap')
 /** The nearest agent host above this process — ['codex'|'claude', 'process'] — or why it is unknown. */
@@ -187,8 +189,10 @@ function heartbeat(activity, focus) {
   writeFileSync(path, JSON.stringify(live))
 }
 
+/** Announces this session once — and again when it now works in another project than it last said. */
 function sessionEvent(events) {
-  if (!events.some(e => e.kind === 'session' && e.session === session)) {
+  const said = events.filter(e => e.kind === 'session' && e.session === session).sort((a, b) => a.at - b.at).pop()
+  if (!said || said.project !== projectKey) {
     emit({ kind: 'session', at: Date.now(), session, title, actor, project: projectKey })
   }
 }
@@ -215,7 +219,7 @@ function act(run, activity) {
 
 switch (command) {
   case 'status':
-    act(ctx => actions.statusAction(ctx, { all: flags.all }), 'roadmap status')
+    act(ctx => actions.statusAction(ctx, { all: yes(flags.all) }), 'roadmap status')
     break
   case 'step':
     act(ctx => actions.stepAction(ctx, { step: args[0] }), `roadmap step ${args[0] ?? ''}`)
@@ -227,13 +231,13 @@ switch (command) {
   }
   case 'md': {
     const { b } = board()
-    const shown = model.forProject(b, flags.all ? '*' : projectKey)
+    const shown = model.forProject(b, yes(flags.all) ? '*' : projectKey)
     const t = args[0] && shown.tracks.find(x => x.name === args[0])
     if (args[0] && !t) {
       const other = b.tracks.find(x => x.name === args[0])
       fail(other ? `track "${args[0]}" is in project ${shown.elsewhere?.[args[0]] ?? 'another'}; add --all to print it here` : `no track "${args[0]}"`)
     }
-    process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset) : model.boardMarkdown(shown, Date.now(), offset)) + '\n')
+    process.stdout.write((t ? model.trackMarkdown(t, Date.now(), offset, shown) : model.boardMarkdown(shown, Date.now(), offset)) + '\n')
     break
   }
   case 'plan': {
@@ -266,7 +270,7 @@ switch (command) {
           step: args[0],
           shipped: flags.shipped,
           evidence: flags.evidence,
-          status: flags.failed ? 'failed' : 'done',
+          status: yes(flags.failed) ? 'failed' : 'done',
           follow_ups: [].concat(flags['follow-up'] ?? []).map(raw => {
             const m = /^(.*?)(?::(P[0-3]))?$/.exec(String(raw))
             return { title: (m?.[1] ?? '').trim(), priority: m?.[2] }

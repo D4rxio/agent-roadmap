@@ -97,7 +97,9 @@ Any tool may read it, and append to it under the same rules, so other agents and
   project); else none. A track in no project shows in every project. Readers show a chat its own project
   by default — its tracks, and the sessions and agents working in it (a session that never said where it
   works shows everywhere, like an unplaced track); `blocked_by` across projects is allowed and is shown
-  as such. A project key is never empty: `/` stays `/`.
+  as such (in every view, and in Markdown). A session's project is the latest it said — its live file
+  first, then its latest `session` event — so a session id reused in another repository moves with it.
+  A project key is never empty: `/` stays `/`.
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.
