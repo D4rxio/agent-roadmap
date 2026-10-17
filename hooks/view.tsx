@@ -294,6 +294,9 @@ export function chainSvg(g: ChainGraph, opts: { maxAcross?: number; focus?: stri
   return { svg, width, height }
 }
 
+/** The most the drawing element takes (`SvgProps.source`). */
+export const SVG_MAX = 131072
+
 /** The tracks with a chain in the project shown — the Chains tab offers them one at a time. */
 export function chainTracks(d: Pick<PaneData, 'board' | 'whole' | 'project'>): string[] {
   const g = chainGraph(d.whole ?? d.board, d.project)
@@ -306,8 +309,8 @@ function chainsView(els: Els, d: PaneData) {
   const tracks = chainTracks(d)
   // This chat's track first: the one it holds a step in, else the one it last worked in.
   const track = [d.chainTrack, d.focus?.split('/')[0], d.chatTrack].find(t => t && tracks.includes(t)) ?? tracks[0]
-  const g = track ? chainGraph(d.whole ?? d.board, d.project, { track, done: d.chainDone }) : chainGraph(d.board, d.project)
-  const folded = track ? (chainGraph(d.whole ?? d.board, d.project, { track }).hidden ?? 0) : 0
+  const g = track ? chainGraph(d.whole ?? d.board, d.project, { track, done: d.chainDone, focus: d.focus }) : chainGraph(d.board, d.project)
+  const folded = track ? (chainGraph(d.whole ?? d.board, d.project, { track, focus: d.focus }).hidden ?? 0) : 0
   const mermaid = mermaidOf(g)
   const title = (name: string) => d.board.tracks.find(t => t.name === name)?.title ?? name
   return (
@@ -371,7 +374,7 @@ function chainsView(els: Els, d: PaneData) {
       </Box>
       {g.nodes.length === 0 && folded ? (
         // Everything in this track's chains is finished: say so, rather than that nothing waits on anything.
-        <Text dimColor>{`Every step in this track's chains is done (${folded}). Show done draws them.`}</Text>
+        <Text dimColor>{`Nothing open in this track's chains: ${folded} finished step${folded === 1 ? ' is' : 's are'} folded. Show done draws them.`}</Text>
       ) : g.nodes.length === 0 ? (
         <Text dimColor>No step waits on another yet. Plans give steps blocked_by; moves show here too.</Text>
       ) : d.canDraw && Svg ? (
@@ -379,6 +382,19 @@ function chainsView(els: Els, d: PaneData) {
           // As many boxes side by side as the pane's width holds (about 8 px a column), never fewer than one.
           const px = Math.max(20, d.cols) * 8
           const drawn = chainSvg(g, { maxAcross: Math.max(1, Math.floor((px + 14) / 244)), focus: d.focus })
+          // The drawing element takes at most 131072 characters: a chain that large reads as text instead.
+          if (drawn.svg.length > SVG_MAX) {
+            return (
+              <Box key="chain-as-text" flexDirection="column">
+                <Text dimColor wrap="truncate-end">Too large to draw here — as text (⧉ Copy as Mermaid draws it elsewhere):</Text>
+                {chainText(g, d.focus).map((line, i) => (
+                  <Text key={`chain-${i}`} wrap="truncate-end">
+                    {line}
+                  </Text>
+                ))}
+              </Box>
+            )
+          }
           const fit = Math.min(1, px / drawn.width)
           // Interactive (a script-less frame): hovering a box shows its whole title.
           return <Svg key="chain-graph" source={drawn.svg} alt={`the chains of ${track ?? 'the roadmap'}`} height={Math.max(40, Math.round(drawn.height * fit))} isInteractive />

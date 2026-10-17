@@ -2207,14 +2207,15 @@ test('the chain graph: boxes and arrows left to right, moves dashed, the longest
   expect(mermaidOf(chainGraph(fold([...events].reverse(), [], 99)))).toBe(m)
   expect(mermaidOf(chainGraph(fold([...events, word(5, 'web', '1', 'running')], [], 99))).split('\n').length).toBe(m.split('\n').length)
   // A terminal gets the same as text; a loop written by hand does not hang it.
+  // A straight run stays at one indent; only a fork indents its branches.
   expect(chainText(g)).toEqual([
     '✓ api/1 Pagination',
-    '   → ○ api/2 One "error" format  ▸ next  ★',
-    '      → ⊘ api/3 Load test',
-    '      → ⊘ web/1 Billing  ★',
-    '         → ⊘ web/3 Export  ★',
+    '→ ○ api/2 One "error" format  ▸ next  ★',
+    '   → ⊘ api/3 Load test',
+    '   → ⊘ web/1 Billing  ★',
+    '   → ⊘ web/3 Export  ★',
     '↪ web/2 Old view',
-    '   ↪ ⊘ web/1 (above)',
+    '↪ ⊘ web/1 (above)',
   ])
   const loop = chainGraph(fold([plan(1, 'x', [{ id: '1', title: 'One', blockedBy: ['2'] }, { id: '2', title: 'Two', blockedBy: ['1'] }])], [], 9))
   expect(chainText(loop).length).toBeGreaterThan(0)
@@ -2294,6 +2295,25 @@ test('chains, one track at a time: its road ahead, its neighbours, no shortcuts,
   expect(g.edges.some(e => e.from === 'a/1' && e.to === 'a/3')).toBe(false)
   expect(g.edges.some(e => e.from === 'a/2' && e.to === 'a/3')).toBe(true)
   // Three steps side by side wrap to the pane's width instead of widening the picture.
+  // Review round: a chain through two other tracks stays whole (a/1 → b/1 → c/1 → a/2).
+  const through = chainGraph(
+    fold(
+      [
+        plan(1, 'a', [{ id: '1', title: 'Start' }, { id: '2', title: 'End', blockedBy: ['c/1'] }]),
+        plan(2, 'b', [{ id: '1', title: 'Middle', blockedBy: ['a/1'] }]),
+        plan(3, 'c', [{ id: '1', title: 'Later', blockedBy: ['b/1'] }]),
+      ],
+      [],
+      9,
+    ),
+    undefined,
+    { track: 'a' },
+  )
+  expect(through.edges.map(e => `${e.from}->${e.to}`).sort()).toEqual(['a/1->b/1', 'b/1->c/1', 'c/1->a/2'])
+  // This chat's finished step is never folded away.
+  const old = fold([...events, done(7, 'a', '0')], [], 99)
+  expect(chainGraph(old, undefined, { track: 'a' }).nodes.some(n => n.ref === 'a/0')).toBe(false)
+  expect(chainGraph(old, undefined, { track: 'a', focus: 'a/0' }).nodes.some(n => n.ref === 'a/0')).toBe(true)
   // This chat's step is marked: in the text tree, and with a halo in the drawing.
   expect(chainText(g, 'a/2').some(l => l.includes('a/2 Open') && l.includes('● this chat'))).toBe(true)
   expect(chainSvg(g, { focus: 'a/2' }).svg).toContain('#f0883e')
@@ -2302,6 +2322,38 @@ test('chains, one track at a time: its road ahead, its neighbours, no shortcuts,
   const wide = chainSvg(g, { maxAcross: 3 })
   expect(narrow.width).toBeLessThan(wide.width)
   expect(narrow.height).toBeGreaterThan(wide.height)
+})
+
+test('a chain too large for the drawing element reads as text instead', async ($, on) => {
+  const off = { required: false }
+  const steps = Array.from({ length: 320 }, (_, i) => ({ id: `${i}`, title: `Step number ${i} of a very long chain of work`, review: off, ...(i ? { blockedBy: [`${i - 1}`] } : {}) }))
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'big', title: 'Big', phases: [{ name: 'P', steps }] }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({ value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })) }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-big' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'view-chains' })
+  expect(await ui.find({ text: /Too large to draw here/ })).toBeDefined()
+  expect(await ui.find({ text: /big\/0 Step number 0/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test('the Chains tab draws the graph (a text tree in the terminal) and copies it as Mermaid', async ($, on) => {
@@ -2390,7 +2442,7 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
   const later = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await later.press({ key: 'view-chains' })
   await later.press({ key: 'chain-track-1' })
-  expect(await later.find({ text: /Every step in this track's chains is done \(2\)/ })).toBeDefined()
+  expect(await later.find({ text: /Nothing open in this track's chains: 2 finished steps are folded/ })).toBeDefined()
   await later.press({ key: 'chain-done' })
   expect(await later.find({ text: /→ ✓ web\/2 Form/ })).toBeDefined()
   await later.unmount()

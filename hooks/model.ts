@@ -922,7 +922,7 @@ export type ChainGraph = {
  * where its obligation went. Columns follow the longest path of prerequisites, so a chain reads left to
  * right; the longest chain of open steps is marked. Sets aside backlog and archived tracks. No time axis.
  */
-export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?: string; done?: boolean } = {}): ChainGraph {
+export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?: string; done?: boolean; focus?: string } = {}): ChainGraph {
   // `board` is the whole board, so a chain crossing into another project keeps its arrows; `project` keeps
   // the chains that touch that project's (or unplaced) steps and marks the steps of other projects.
   const scope = project && project !== '*' ? project : undefined
@@ -966,7 +966,8 @@ export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?
     edges.splice(0, edges.length, ...edges.filter(e => keep.has(e.from) && keep.has(e.to)))
   }
   // One track in focus: its steps in some chain, and the steps of other tracks right next to them. Its
-  // finished steps that lead to nothing still open are folded away, so the picture shows the road ahead.
+  // finished steps are folded away unless they stand right before (or after) open work, or are this
+  // chat's — so the picture shows the road ahead with its immediate context.
   let hidden = 0
   if (opts.track) {
     const mine = (ref: string) => steps.get(ref)?.t.name === opts.track
@@ -976,11 +977,13 @@ export function chainGraph(board: RoadmapBoard, project?: string, opts: { track?
     }
     const touches = (ref: string) => edges.some(e => (e.from === ref && live(e.to)) || (e.to === ref && live(e.from)))
     const own = new Set(edges.flatMap(e => [e.from, e.to]).filter(mine))
-    const kept = new Set([...own].filter(ref => opts.done || live(ref) || touches(ref)))
+    const kept = new Set([...own].filter(ref => opts.done || live(ref) || touches(ref) || ref === opts.focus))
     hidden = own.size - kept.size
     const near = edges.filter(e => (kept.has(e.from) && !mine(e.to)) || (kept.has(e.to) && !mine(e.from))).flatMap(e => [e.from, e.to])
     for (const ref of near) kept.add(ref)
-    edges.splice(0, edges.length, ...edges.filter(e => kept.has(e.from) && kept.has(e.to) && (mine(e.from) || mine(e.to))))
+    // Every arrow between two steps on the picture stays — between two neighbours from other tracks too,
+    // or a chain through them (a/1 → b/1 → c/1 → a/2) would break in two.
+    edges.splice(0, edges.length, ...edges.filter(e => kept.has(e.from) && kept.has(e.to)))
   }
   // An arrow that a longer path already implies (A → B → C makes A → C redundant) is dropped: the picture
   // shows each dependency once, and the order of steps and the longest chain stay the same.
@@ -1124,7 +1127,10 @@ export function chainText(g: ChainGraph, focus?: string): string[] {
     }
     seen.add(ref)
     lines.push(`${indent}${arrow}${ICONS[n.status]} ${ref} ${n.title}${n.external ? ` (in project ${n.external})` : ''}${marks}`)
-    for (const e of kids.get(ref) ?? []) walk(e.to, indent + '   ', e)
+    // A straight run stays at one indent; only a fork indents its branches — so a long chain reads
+    // down the page instead of drifting off to the right.
+    const next = kids.get(ref) ?? []
+    for (const e of next) walk(e.to, next.length > 1 ? indent + '   ' : indent, e)
   }
   for (const n of g.nodes) if (!hasParent.has(n.ref)) walk(n.ref, '')
   // A loop has no start: begin it at its first step.
