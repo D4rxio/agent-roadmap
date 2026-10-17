@@ -20,7 +20,7 @@ import {
   nextPersonId,
   trackMarkdown,
 } from './model'
-import { doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
+import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
 import { drawBand, drawPane } from './view'
 import type { RoadmapView } from './view'
@@ -374,6 +374,15 @@ async function personSkip($: EngineInterface, track: string, id: string, reason:
 /** The person confirms a worker's proposed move: the step's obligation now lives in `to`. */
 async function personMove($: EngineInterface, track: string, id: string, to: string, reason: string) {
   if (!to.trim()) return
+  // The journal may have moved on since the proposal: check the move as it would stand now.
+  await sync($).catch(() => undefined)
+  const problem = checkMove(journal.events, Date.now(), track, id, to.trim())
+  if (problem) {
+    $.ui.toast(`Not moved: ${problem}`)
+    // Redraw from the journal as it is now, so the pane shows why instead of the stale Confirm move.
+    await republish($)
+    return
+  }
   await emit($, { kind: 'step', at: Date.now(), session: journal.me, track, id, status: 'moved', movedTo: to.trim(), reason: reason.trim() || undefined, origin: 'person', actor: 'person' })
   $.ui.toast(`↪ ${track}/${id} moved to ${to.trim()}`)
 }

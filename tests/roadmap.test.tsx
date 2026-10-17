@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { doneAction, markAction, planAction, reviewAction, stepAction } from '../hooks/actions'
+import { checkMove, doneAction, markAction, planAction, reviewAction, stepAction } from '../hooks/actions'
 import { versionAtLeast } from '../hooks/register'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
@@ -1581,6 +1581,96 @@ test('moved: a step hands its obligation to another; the person confirms; depend
   expect(get([...p1, step(200, '1', 'todo', 'person')], '1')?.status).toBe('todo')
   // A `moved` without a target is no move at all.
   expect(get([plan, step(2, '1', 'moved', 'person')], '1')?.status).toBe('todo')
+})
+
+test('moved, second round: only the person undoes a move, a dropped source still hands on its policy, a move is checked when confirmed', async () => {
+  const ctx = (events: RoadmapEvent[], extra: object = {}) => ({ events, lives: [], now: 100, session: 's1', actor: 'claude', ...extra })
+  const cross = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const off = { required: false }
+  const plan = (at: number, ids: string[]) =>
+    ({ kind: 'plan', at, session: 's', track: 'a', phases: [{ name: 'P', steps: ids.map(id => ({ id, title: `S${id}`, review: id === '1' ? cross : off, ...(id === '3' ? { blockedBy: ['1'] } : {}) })) }] }) as RoadmapEvent
+  const step = (at: number, id: string, status: string, origin = 'agent', extra: object = {}) =>
+    ({ kind: 'step', at, session: origin === 'person' ? 'p' : 'c1', track: 'a', id, status, actor: origin === 'person' ? 'person' : 'claude', origin, ...extra }) as RoadmapEvent
+  const move = (at: number, id: string, to: string, origin = 'person') => step(at, id, 'moved', origin, { movedTo: to, reason: 'r' })
+  const get = (events: RoadmapEvent[], id: string) => fold(events, [], 9999).tracks[0]?.steps.find(x => x.id === id)
+  const base = [plan(1, ['1', '2', '3', '4']), move(10, '1', 'a/2')]
+
+  // 1. A worker's later report cannot undo a confirmed move, nor free its dependents early.
+  expect(get([...base, step(20, '1', 'done')], '1')?.status).toBe('moved')
+  expect(get([...base, step(20, '1', 'done')], '3')?.status).toBe('blocked')
+  expect(get([...base, step(20, '1', 'running')], '1')?.status).toBe('moved')
+  const agent = { kind: 'agent', at: 5, session: 'c1', agentId: 'g', description: 'x', type: 'Explore', track: 'a', step: '1' } as RoadmapEvent
+  const agentEnd = { kind: 'agent-end', at: 10, session: 'c1', agentId: 'g', status: 'done' } as RoadmapEvent
+  expect(get([...base, agent, agentEnd], '1')?.status).toBe('moved')
+  expect(get([...base, agent, agentEnd], '3')?.status).toBe('blocked')
+  // … the person can: their own word undoes it.
+  expect(get([...base, step(20, '1', 'todo', 'person')], '1')?.status).toBe('todo')
+
+  // 2. The source leaving the plan does not take its policy with it: the target still needs a cross-model review.
+  const dropped = [...base, plan(20, ['2', '3', '4'])]
+  expect(get(dropped, '2')?.carries).toEqual(['a/1'])
+  expect(get(dropped, '2')?.review?.independence).toBe('cross-model')
+  expect(get([...dropped, step(30, '2', 'running'), step(31, '2', 'done')], '2')?.status).toBe('awaiting')
+
+  // 3. Two proposals that would loop each pass on their own; once one is confirmed, the other cannot be.
+  const p1 = markAction(ctx([plan(1, ['1', '2', '3', '4'])]), { step: 'a/1', status: 'moved', to: '2', reason: 'r' })
+  const p2 = markAction(ctx([plan(1, ['1', '2', '3', '4']), ...p1.emit], { now: 101 }), { step: 'a/2', status: 'moved', to: '1', reason: 'r' })
+  expect(p1.ok && p2.ok).toBe(true)
+  const confirmedOne = [plan(1, ['1', '2', '3', '4']), ...p1.emit, ...p2.emit, move(200, '1', 'a/2')]
+  expect(get(confirmedOne, '2')?.moveProblem).toContain('loop back here')
+  expect(checkMove(confirmedOne, 300, 'a', '2', 'a/1')).toContain('leads back')
+  // A target that left the plan between proposal and confirmation cannot be confirmed either.
+  const p4 = markAction(ctx([plan(1, ['1', '2', '3', '4'])]), { step: 'a/1', status: 'moved', to: '4', reason: 'r' })
+  const gone = [plan(1, ['1', '2', '3', '4']), ...p4.emit, plan(200, ['1', '2', '3'])]
+  expect(get(gone, '1')?.moveProblem).toContain('no longer exists')
+  expect(checkMove(gone, 300, 'a', '1', 'a/4')).toContain('does not exist')
+  expect(checkMove([plan(1, ['1', '2'])], 300, 'a', '1', 'a/2')).toBe(undefined)
+})
+
+test('the pane will not confirm a move that no longer stands, even from a stale render', async ($, on) => {
+  const plan = (at: number, ids: string[]) => ({ kind: 'plan', at, session: 's', track: 'api', title: 'API', phases: [{ name: 'P', steps: ids.map(id => ({ id, title: `S${id}`, review: { required: false } })) }] })
+  const events = [plan(1000, ['1', '2']), { kind: 'step', at: 1100, session: 'c1', track: 'api', id: '1', status: 'moved', movedTo: 'api/2', reason: 'r', actor: 'claude', origin: 'agent' }]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-move' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(String((e as { message?: unknown }).message ?? JSON.stringify(e)))
+    return { value: undefined }
+  })
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /Confirm move/ })).toBeDefined()
+  // Another chat drops the target before the person clicks.
+  files.set('/home/t/.claude/roadmap/events/1792000000000-o-y.json', JSON.stringify(plan(1200, ['1'])))
+  await ui.press({ key: 'ok-api-1' })
+  expect([...files.values()].some(t => t.includes('"status":"moved"') && t.includes('"origin":"person"'))).toBe(false)
+  expect(toasts.some(t => t.includes('Not moved'))).toBe(true)
+  await ui.unmount()
+  // Drawn again, the pane says why and offers no Confirm move.
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await again.find({ text: /but api\/2 no longer exists/ })).toBeDefined()
+  expect(await again.find({ text: /Confirm move/ })).toBe(undefined)
+  await again.unmount()
 })
 
 test('the pane shows a review owed and offers the person to confirm without it', async ($, on) => {

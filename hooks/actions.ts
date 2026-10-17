@@ -89,6 +89,22 @@ export function readPolicy(raw: unknown): { policy?: RoadmapReviewPolicy; error?
   return { policy: policyOf({ required, independence, mode }) }
 }
 
+/**
+ * Why moving `<track>/<id>` onto `to` cannot stand right now, or undefined when it can: the target must
+ * exist, not be the step itself, and not lead back to it through moves already confirmed. The pane runs
+ * this again when the person confirms, since the journal may have changed since the proposal.
+ */
+export function checkMove(events: RoadmapEvent[], now: number, track: string, id: string, to: string): string | undefined {
+  const board = fold(events, [], now)
+  const [tt, ti] = [to.split('/')[0] ?? '', to.split('/').slice(1).join('/')]
+  if (!board.tracks.find(t => t.name === tt)?.steps.some(x => x.id === ti)) return `${to} does not exist`
+  if (to === `${track}/${id}`) return 'a step cannot be moved onto itself'
+  const confirmed: RoadmapEvent = { kind: 'step', at: now + 1, session: 'check', track, id, status: 'moved', movedTo: to, origin: 'person' }
+  const would = fold([...events, confirmed], [], now).tracks.find(t => t.name === track)?.steps.find(x => x.id === id)
+  if (!would?.movedFinal) return `${to} leads back to ${track}/${id} through earlier moves, so the obligation would end nowhere`
+  return undefined
+}
+
 /** What an agent is told about a step that waits: for a review its policy requires, or for the person. */
 function waiting(
   s: { reviewPending?: boolean; reviewState?: string; passedReview?: { actor: string }; review?: { independence?: string }; implementer?: { actor: string } } | undefined,
@@ -231,10 +247,8 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
       return refused(`A move needs \`to\`: the step that now carries this obligation ("<track>/<id>", or "<id>" in ${ref.track}), and it must exist.`)
     }
     movedTo = `${target.track}/${target.id}`
-    if (movedTo === ref2) return refused('A step cannot be moved onto itself.')
-    const confirmed: RoadmapEvent = { kind: 'step', at: ctx.now + 1, session: ctx.session, track: ref.track, id: ref.id, status: 'moved', movedTo, reason, origin: 'person' }
-    const would = fold([...ctx.events, confirmed], [], ctx.now).tracks.find(t => t.name === ref.track)?.steps.find(x => x.id === ref.id)
-    if (!would?.movedFinal) return refused(`Not moved: ${movedTo} leads back to ${ref2} through earlier moves, so the obligation would end nowhere.`)
+    const problem = checkMove(ctx.events, ctx.now, ref.track, ref.id, movedTo)
+    if (problem) return refused(`Not moved: ${problem}.`)
   }
   const emit: RoadmapEvent[] = []
   if (priority !== undefined || backlog !== undefined) {

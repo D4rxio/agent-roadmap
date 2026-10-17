@@ -174,6 +174,8 @@ export type RoadmapStep = {
   moveReason?: string
   /** Where the obligation ends up after a chain of moves; absent when the chain is broken or loops. */
   movedFinal?: string
+  /** Why a proposed move cannot be confirmed as it stands (its target is gone, or it would loop). */
+  moveProblem?: string
   /** Steps whose obligation was moved here (directly or through a chain): this step answers for them. */
   carries?: string[]
   /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */

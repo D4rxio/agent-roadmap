@@ -339,7 +339,9 @@ function needsYou(els: Els, d: PaneData) {
           ) : st.reviewState === 'reviewed' && st.passedReview ? (
             <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
           ) : st.proposed === 'moved' ? (
-            <Text dimColor wrap="truncate-end">{`   proposes moving it to ${st.movedTo ?? '?'}: ${st.moveReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
+            <Text dimColor wrap="truncate-end">{st.moveProblem
+              ? `   proposes moving it to ${st.movedTo ?? '?'}, but ${st.moveProblem} — reject it, or ask for another target`
+              : `   proposes moving it to ${st.movedTo ?? '?'}: ${st.moveReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.proposed === 'skipped' ? (
             <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.evidence || st.lastBy ? (
@@ -347,6 +349,7 @@ function needsYou(els: Els, d: PaneData) {
           ) : null}
           <Box flexDirection="row" gap={1} marginTop={0}>
             <Text>{'  '}</Text>
+            {st.moveProblem ? null : (
             <Button
               key={`ok-${st.track}-${st.id}`}
               variant="primary"
@@ -360,6 +363,7 @@ function needsYou(els: Els, d: PaneData) {
             >
               {st.proposed === 'skipped' ? 'Confirm skip' : st.proposed === 'moved' ? 'Confirm move' : st.reviewPending ? 'Confirm without review' : 'Confirm ✓'}
             </Button>
+            )}
             <Button
               key={`no-${st.track}-${st.id}`}
               onPress={() => d.onDecide(st.track, st.id, st.proposed === 'skipped' || st.proposed === 'moved' ? 'todo' : 'failed')}

@@ -241,10 +241,16 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
   // Moves the person confirmed (a step's last word is the person's `moved`), each followed to where the
   // obligation ends up. A broken or looping chain ends nowhere: nothing it was meant to satisfy is.
   const exists = new Set([...tracks.values()].flatMap(t => t.steps.map(s => key(t.name, s.id))))
+  // A confirmed move stands until the person's own word changes it: a worker's later report (a done, an
+  // agent's end) cannot undo it — the work is owed elsewhere now.
   const moves = new Map<string, string>()
   for (const [k, list] of words) {
-    const last = [...list].sort((a, b) => a.at - b.at)[list.length - 1]
-    if (last?.status === 'moved' && last.origin === 'person' && last.movedTo) moves.set(k, last.movedTo)
+    let to: string | undefined
+    for (const w of [...list].sort((a, b) => a.at - b.at)) {
+      if (w.origin !== 'person' || (w.status === 'moved' && !w.movedTo)) continue
+      to = w.status === 'moved' ? w.movedTo : undefined
+    }
+    if (to) moves.set(k, to)
   }
   const finalOf = (k: string): string | undefined => {
     const seen = new Set([k])
@@ -270,7 +276,8 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
     if (!end) continue
     const c = carried.get(end) ?? { from: [] }
     c.from.push(k)
-    c.policy = stricter(policyIn.get(k), c.policy)
+    // A source that has since left the plan still hands on the strictest policy it was ever under.
+    c.policy = stricter(stricter(policyIn.get(k), floors.get(k)), c.policy)
     carried.set(end, c)
   }
 
@@ -287,6 +294,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       let move: { to: string; reason?: string } | undefined
       for (const w of said) {
         const worker = w.origin !== 'person'
+        if (worker && status === 'moved') continue
         // Leaving work out, or handing it to another step, is a decision about scope: a worker proposes it.
         if (worker && (w.status === 'skipped' || (w.status === 'moved' && w.movedTo))) {
           status = 'awaiting'
@@ -308,6 +316,20 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       step.moveReason = move?.reason
       const k0 = key(t.name, step.id)
       step.movedFinal = status === 'moved' ? finalOf(k0) : undefined
+      // A proposed move the person could not confirm as it stands: its target is gone, or following the
+      // moves already confirmed from there leads back here.
+      step.moveProblem = undefined
+      if (status === 'awaiting' && proposed === 'moved' && move) {
+        let at: string | undefined = move.to
+        const seen = new Set<string>()
+        while (at !== undefined && !step.moveProblem) {
+          if (at === k0) step.moveProblem = `it would loop back here through ${move.to}`
+          else if (!exists.has(at)) step.moveProblem = at === move.to ? `${move.to} no longer exists` : `the moves from ${move.to} end at ${at}, which no longer exists`
+          else if (seen.has(at)) step.moveProblem = `the moves from ${move.to} go round in a loop`
+          seen.add(at)
+          at = moves.get(at)
+        }
+      }
       step.carries = carried.get(k0)?.from
       // Review: the policy in force, who implemented, which reviews count, and whether done may stand.
       // The floor applies however the step came to be — laid by a plan, brought back by an `add` or an

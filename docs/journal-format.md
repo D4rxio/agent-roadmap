@@ -48,7 +48,11 @@ Any tool may read it, and append to it under the same rules, so other agents and
   (moves chain: `a → b → c` ends at `c`) and are free once that step is done or skipped. A chain that loops
   or ends at a step that no longer exists ends nowhere, so its dependents stay blocked. The end of a chain
   answers for every step moved along it, review policy included: it is held to the strictest policy among
-  them, so moving work is no way around its review. A `moved` without `movedTo` is ignored.
+  them — a source that has since left the plan included — so moving work is no way around its review.
+  A confirmed move stands until the person's own word changes it: a worker's later report on the moved
+  step (a `done`, an agent's end) is ignored. A `moved` without `movedTo` is ignored. Writers check a move
+  when it is proposed and again when the person confirms it (the target must still exist and must not lead
+  back through confirmed moves); a proposal that no longer stands is shown with why, and cannot be confirmed.
 - Plan steps may carry `why`, `scope` and `doneWhen` (the step's brief); a plan whose `blockedBy`
   closes a loop must not be written.
 - **Review policy.** A plan may carry `review` for the whole track, a step its own:
