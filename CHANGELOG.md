@@ -3,6 +3,24 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Chains: ⤢ Wide, Show done, hover titles, where you are.** ⤢ Wide opens the diagram alone in a pane
+  of its own (Escape closes it). Show done draws the finished steps the tab folds away. Hovering a box
+  shows its whole title. This chat's step is ringed and named above the diagram with its level in the
+  chain.
+- **docs/architecture.md** — how the modules fit together and where each rule lives.
+
+### Changed
+- **A clearer pane.** What is shown (the track, the project) stands out; its actions are dimmed.
+- **The text tree indents only at a fork**, so a long chain reads down the page.
+
+### Fixed
+- A chain through two other tracks no longer breaks in two; this chat's finished step is never folded
+  away; a track with nothing open says so instead of claiming every step is done; a chain too large
+  for the drawing element reads as text.
+
 ## [0.5.0] — 2026-10-17
 
 ### Added

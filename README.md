@@ -197,6 +197,9 @@ claude plugin validate .
 claude plugin test .
 ```
 
+How the modules fit together, where each rule lives and what to watch for when changing them:
+[docs/architecture.md](docs/architecture.md).
+
 To run your working copy instead of the installed one, add its folder to `CLAUDE_CODE_PLUGIN_DIRS`.
 
 ## Suggestions welcome
