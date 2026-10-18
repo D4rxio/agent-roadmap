@@ -19,6 +19,9 @@ export type PaneData = {
   /** Whether the Chains tab shows the finished steps it would fold away. */
   chainDone?: boolean
   onChainDone?: (show: boolean) => void
+  /** What the person searches for in the Tracks view, and how a change of it is kept. */
+  search?: string
+  onSearch?: (query: string) => void
   /** Opens the Chains diagram in a wide pane of its own. */
   onWide?: () => void
   /** This is that wide pane. */
@@ -676,13 +679,75 @@ function needsYou(els: Els, d: PaneData) {
   )
 }
 
-function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
+/**
+ * Whether a search finds `text`: every word of the query, in any order, ignoring case and accents
+ * ("gesla" finds "gęślą").
+ */
+export function matches(text: string, query: string): boolean {
+  const plain = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const hay = plain(text)
+  return plain(query).split(/\s+/).filter(Boolean).every(w => hay.includes(w))
+}
+
+/** The search above the tracks: what to show for a query, and the box itself. */
+function searchBox(els: Els, d: PaneData) {
+  const { Box, Text, Input } = els
+  if (!Input || !d.onSearch) return null
+  return (
+    <Box key="search-row" flexDirection="row" gap={1} marginTop={1} marginBottom={1}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Input
+          key="search"
+          placeholder="Search tracks and steps"
+          value={d.search ?? ''}
+          onInput={(value: string) => d.onSearch?.(value)}
+          onSubmit={(value: string) => d.onSearch?.(value.trim())}
+        />
+      </Box>
+      {d.search
+        ? Btn(els, d, { key: 'search-clear', plain: true, onPress: () => d.onSearch?.('') }, 'Clear', <Text><Text dimColor>✕ Clear</Text></Text>)
+        : null}
+    </Box>
+  )
+}
+
+/** The Tracks view: every track, or under a search the tracks and steps it finds. */
+function tracksView(els: Els, d: PaneData) {
+  const { Box, Text } = els
+  const held = d.focus.split('/')[0]
+  const order = (a: RoadmapTrack, b: RoadmapTrack) => Number(b.name === held) - Number(a.name === held)
+  const q = (d.search ?? '').trim()
+  if (!q) return [searchBox(els, d), ...d.board.tracks.filter(t => !t.backlog && !t.archived).sort(order).map(t => trackCard(els, d, t))]
+  // A search looks everywhere in the project shown, backlog and archive included: finding is the point.
+  const found = d.board.tracks
+    .map(t => {
+      const whole = matches(`${t.name} ${t.title}`, q)
+      const hits = t.steps.filter(s => matches(`${t.name}/${s.id} ${s.title}`, q)).map(s => s.id)
+      return { t, whole, hits }
+    })
+    .filter(x => x.whole || x.hits.length)
+  const steps = found.reduce((n, x) => n + x.hits.length, 0)
+  return [
+    searchBox(els, d),
+    <Text key="search-count" dimColor>
+      {found.length
+        ? `${found.length} track${found.length === 1 ? '' : 's'}${steps ? `, ${steps} step${steps === 1 ? '' : 's'}` : ''} match "${q}"`
+        : `Nothing matches "${q}"`}
+    </Text>,
+    ...found
+      .sort((a, b) => order(a.t, b.t))
+      .map(x => (x.whole ? trackCard(els, d, x.t) : trackCard(els, d, x.t, new Set(x.hits)))),
+  ]
+}
+
+/** One track; `only` narrows it to those steps, opened (what a search found). */
+function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
   const { Box, Text, Button } = els
   const { done, total } = progress(t)
   const pct = total ? Math.round((done / total) * 100) : 0
-  const isOpen = d.expanded.includes(t.name)
+  const isOpen = only ? true : d.expanded.includes(t.name)
   const active = t.steps.filter(s => !s.backlog)
-  const shelved = t.steps.filter(s => s.backlog).sort(byPriority)
+  const shelved = t.steps.filter(s => s.backlog && (!only || only.has(s.id))).sort(byPriority)
   const blocked = active.filter(s => s.status === 'blocked').length
   const running = t.steps.filter(s => s.status === 'running').length
   const awaiting = t.steps.filter(s => s.status === 'awaiting').length
@@ -741,7 +806,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
       {Row(els, `meta-${t.name}`, <Text dimColor wrap="truncate-end">{momentum(t, d) || t.name}</Text>, chips.join('  '))}
       {isOpen &&
         t.phases.map(p => {
-          const own = active.filter(s => p.stepIds.includes(s.id))
+          const own = active.filter(s => p.stepIds.includes(s.id) && (!only || only.has(s.id)))
           const pDone = own.filter(s => s.status === 'done').length
           if (own.length === 0) return null
           // A phase with work left, or holding this chat's step, starts open; a finished one starts
@@ -749,7 +814,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack) {
           const finished = own.every(s => s.status === 'done' || s.status === 'skipped' || s.status === 'moved')
           const holds = own.some(s => d.focus === `${t.name}/${s.id}`)
           const pkey = `${t.name}::${p.name}`
-          const open = d.phaseOpen[pkey] ?? (!finished || holds)
+          const open = only ? true : (d.phaseOpen[pkey] ?? (!finished || holds))
           return (
             <Box key={`phase-${t.name}-${p.name}`} flexDirection="column" marginTop={1}>
               {Row(
@@ -1102,10 +1167,7 @@ export function drawPane(els: Els, d: PaneData) {
           ? chainsView(els, d)
         : d.view === 'backlog'
           ? backlogView(els, d)
-          : d.board.tracks
-              .filter(t => !t.backlog && !t.archived)
-              .sort((a, b) => Number(b.name === d.focus.split('/')[0]) - Number(a.name === d.focus.split('/')[0]))
-              .map(t => trackCard(els, d, t))}
+          : tracksView(els, d)}
       {d.view === 'tracks' ? liveSection(els, d) : null}
     </Box>
   )

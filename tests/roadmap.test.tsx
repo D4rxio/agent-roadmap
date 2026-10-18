@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { inTime, versionAtLeast } from '../hooks/register'
-import { chainSvg, whoseReview } from '../hooks/view'
+import { chainSvg, matches, whoseReview } from '../hooks/view'
 
 import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
@@ -2046,6 +2046,67 @@ test('the pane keeps a way to every project, shows only its own chats, and offer
   await ui.unmount()
 })
 
+test('the search above the tracks finds tracks and steps, ignoring case and accents', async ($, on) => {
+  const off = { required: false }
+  const events = [
+    { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence', review: off }, { id: '2', title: 'Zażółć gęślą jaźń', review: off }] }] },
+    { kind: 'plan', at: 1001, session: 's', track: 'web', title: 'Web app', phases: [{ name: 'Q', steps: [{ id: '1', title: 'Login page', review: off }] }] },
+    { kind: 'plan', at: 1002, session: 's', track: 'old', title: 'Old gesla work', phases: [{ name: 'R', steps: [{ id: '1', title: 'Clean', review: off }] }] },
+    { kind: 'triage', at: 1003, session: 'p', track: 'old', archived: true, origin: 'person' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-search' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  expect(matches('Zażółć gęślą jaźń', 'GESLA zaz')).toBe(true)
+  expect(matches('Zażółć gęślą jaźń', 'gesla login')).toBe(false)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // Without a search: the tracks, folded; the archived one is not among them.
+    expect(await ui.find({ text: /Web app/ })).toBeDefined()
+    expect(await ui.find({ text: /Old gesla work/ })).toBe(undefined)
+    expect(await ui.find({ text: /Zażółć/ })).toBe(undefined)
+    // Typing narrows as it goes: the matching step shows, opened; another track's title matches too,
+    // even archived — a search looks everywhere.
+    await ui.input({ key: 'search', text: 'gesla', kind: 'change' })
+    expect(await ui.find({ text: /Zażółć gęślą jaźń/ })).toBeDefined()
+    expect(await ui.find({ text: /Fence/ })).toBe(undefined)
+    expect(await ui.find({ text: /Old gesla work/ })).toBeDefined()
+    expect(await ui.find({ text: /Web app/ })).toBe(undefined)
+    expect(await ui.find({ text: /2 tracks, 1 step match "gesla"/ })).toBeDefined()
+    // A step's ref finds it too.
+    await ui.input({ key: 'search', text: 'web/1', kind: 'change' })
+    expect(await ui.find({ text: /Login page/ })).toBeDefined()
+    await ui.input({ key: 'search', text: 'nothing like it' })
+    expect(await ui.find({ text: /Nothing matches "nothing like it"/ })).toBeDefined()
+    await ui.press({ key: 'search-clear' })
+    expect(await ui.find({ text: /Web app/ })).toBeDefined()
+    expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    expect(await ui.find({ text: /match/ })).toBe(undefined)
+    await ui.unmount()
+  }
+})
+
 test('a chat older than some state keys still draws the pane and the band', async ($, on) => {
   const plan = { kind: 'plan', at: 1000, session: 's', track: 'api', title: 'API v2', phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence', review: { required: false } }] }] }
   const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(plan)]])
@@ -2071,7 +2132,7 @@ test('a chat older than some state keys still draws the pane and the band', asyn
   on('clock.every', () => ({ value: undefined }))
   on('session.start', (_$, e) => e)
   // This chat's state contract predates these keys: reading or writing them is refused.
-  const newer = ['focus', 'phaseOpen', 'editing', 'project', 'outdated']
+  const newer = ['focus', 'phaseOpen', 'editing', 'project', 'outdated', 'search']
   on('state.get', (_$, e: any, next: any) => (newer.includes(e.key) ? { deny: `no state key ${e.key}` } : next(e)))
   on('state.set', (_$, e: any, next: any) => (newer.includes(e.key) ? { deny: `no state key ${e.key}` } : next(e)))
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
@@ -2082,6 +2143,9 @@ test('a chat older than some state keys still draws the pane and the band', asyn
   // Folding a phase and pinning write newer keys: refused quietly, the pane keeps working.
   await ui.press({ key: 'fold-api' })
   expect(await ui.find({ text: /Fence/ })).toBeDefined()
+  // Searching writes a newer key too: refused quietly, the tracks stay as they were.
+  await ui.input({ key: 'search', text: 'nothing like it', kind: 'change' })
+  expect(await ui.find({ text: /API v2/ })).toBeDefined()
   await ui.unmount()
   const band = await $.ui.mount({
     plugin: 'roadmap',

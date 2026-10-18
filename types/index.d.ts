@@ -337,6 +337,8 @@ declare module 'claude-code' {
       chainTrack: string
       /** Whether the Chains tab shows the finished steps it would otherwise fold away. */
       chainDone: boolean
+      /** What the Tracks view searches for in this chat ('' : no search). */
+      search: string
     }
   }
 }

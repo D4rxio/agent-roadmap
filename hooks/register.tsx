@@ -51,6 +51,7 @@ const outdated = atom({ plugin: 'roadmap', key: 'outdated' } as const, false)
 const projectView = atom({ plugin: 'roadmap', key: 'project' } as const, '')
 const chainTrack = atom({ plugin: 'roadmap', key: 'chainTrack' } as const, '')
 const chainDone = atom({ plugin: 'roadmap', key: 'chainDone' } as const, false)
+const search = atom({ plugin: 'roadmap', key: 'search' } as const, '')
 
 /**
  * The project a folder belongs to: its main repository's folder, found through git's common dir so every
@@ -143,6 +144,14 @@ async function readChainDone($: EngineInterface): Promise<boolean> {
     return (await read($, chainDone)) === true
   } catch {
     return false
+  }
+}
+
+async function readSearch($: EngineInterface): Promise<string> {
+  try {
+    return (await read($, search)) ?? ''
+  } catch {
+    return ''
   }
 }
 
@@ -471,6 +480,8 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
     onChainTrack: (t: string) => void update($, chainTrack, () => t).catch(() => undefined),
     chainDone: await readChainDone($),
     onChainDone: (show: boolean) => void update($, chainDone, () => show).catch(() => undefined),
+    search: await readSearch($),
+    onSearch: (q: string) => void update($, search, () => q).catch(() => undefined),
     project: shown,
     here: journal.project,
     onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),
