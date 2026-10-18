@@ -336,6 +336,41 @@ async function sync($: EngineInterface): Promise<boolean> {
 }
 
 /** Deletes files by path, a batch at a time: `rm` where there is one, `del` on Windows. */
+/**
+ * A small diagnostics log per chat, `<journal>/diag/<session>.log`: loads, render failures and timeouts,
+ * slow renders, and a per-minute count of renders. The engine reports a refused or failed pane only to
+ * its debug log, which is off in the desktop app; this keeps the last few hundred lines where we can read
+ * them. Local only, like the journal.
+ */
+const diag = { lines: [] as string[], dirty: false, renders: 0, slowest: 0, since: Date.now() }
+
+function note(line: string) {
+  diag.lines.push(`${new Date().toISOString()} ${line}`)
+  if (diag.lines.length > 300) diag.lines.splice(0, diag.lines.length - 300)
+  diag.dirty = true
+}
+
+async function flushDiag($: EngineInterface) {
+  if (!diag.dirty || !journal.dir || !journal.me) return
+  diag.dirty = false
+  await $.fs.write(`${journal.dir}/diag/${journal.me}.log`, diag.lines.join('\n') + '\n').catch(() => undefined)
+}
+
+/** Counts a render and how long it took; a slow or failed one gets a line of its own. */
+function rendered(what: string, ms: number, error?: unknown) {
+  diag.renders++
+  diag.slowest = Math.max(diag.slowest, ms)
+  if (error !== undefined) note(`${what} render failed after ${ms} ms: ${error instanceof Error ? error.message : String(error)}`)
+  else if (ms > 500) note(`${what} render slow: ${ms} ms`)
+  const now = Date.now()
+  if (now - diag.since >= 60_000) {
+    note(`renders in the last ${Math.round((now - diag.since) / 1000)} s: ${diag.renders}, slowest ${diag.slowest} ms; events ${journal.events.length}`)
+    diag.renders = 0
+    diag.slowest = 0
+    diag.since = now
+  }
+}
+
 async function remove($: EngineInterface, paths: string[]): Promise<void> {
   for (let i = 0; i < paths.length; i += 200) {
     const batch = paths.slice(i, i + 200)
@@ -863,8 +898,18 @@ export const register: Register = on => {
     })
 
     await noteCode($).catch(() => undefined)
+    const loadedAt = Date.now()
     await sync($).catch(() => undefined)
     await republish($)
+    note(`module loaded; engine ${engine?.version ?? '?'}; code ${code.hash || '?'}; journal read in ${Date.now() - loadedAt} ms, ${journal.events.length} events`)
+    void flushDiag($)
+    // Diagnostics of chats gone for a week are dropped.
+    void (async () => {
+      const old = (await $.fs.list(`${journal.dir}/diag`).catch(() => []))
+        .filter(x => x.kind === 'file' && Date.now() - x.mtimeMs > 7 * 86_400_000)
+        .map(x => `${journal.dir}/diag/${x.name}`)
+      if (old.length) await remove($, old)
+    })().catch(() => undefined)
     // A (re)loaded module draws its panes again: one left from the module before would keep buttons that
     // no longer answer.
     try {
@@ -881,6 +926,7 @@ export const register: Register = on => {
         const synced = await sync($)
         const beat = await heartbeat($)
         await checkCode($).catch(() => undefined)
+        await flushDiag($)
         const changed = synced || beat
         const mine = [...journal.agents.keys()]
         if (mine.length > 0) {
@@ -1024,9 +1070,14 @@ export const register: Register = on => {
     // A pane that cannot draw says why instead of staying blank (e.g. code reloaded in a running chat),
     // and one whose data does not come in time says so too, rather than leaving the host's placeholder.
     const els = $.ui.resolve(e)
+    const t0 = Date.now()
     try {
-      return drawPane(els, await inTime(ms => $.clock.sleep(ms), paneData($, e)))
+      const drawn = drawPane(els, await inTime(ms => $.clock.sleep(ms), paneData($, e)))
+      rendered('pane', Date.now() - t0)
+      return drawn
     } catch (err) {
+      rendered('pane', Date.now() - t0, err)
+      void flushDiag($)
       return cannotDraw(els, err)
     }
   })
@@ -1034,9 +1085,14 @@ export const register: Register = on => {
   // The Chains diagram alone, in a pane of its own that can open wide (⤢ Wide in the Chains tab).
   on('ui.render', { component: 'Pane', requestId: CHAINS }, async ($, e) => {
     const els = $.ui.resolve(e)
+    const t0 = Date.now()
     try {
-      return drawChainsPane(els, { ...(await inTime(ms => $.clock.sleep(ms), paneData($, e))), wide: true })
+      const drawn = drawChainsPane(els, { ...(await inTime(ms => $.clock.sleep(ms), paneData($, e))), wide: true })
+      rendered('chains', Date.now() - t0)
+      return drawn
     } catch (err) {
+      rendered('chains', Date.now() - t0, err)
+      void flushDiag($)
       return cannotDraw(els, err)
     }
   })

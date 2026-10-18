@@ -3,6 +3,14 @@
 All notable changes to this project. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **A diagnostics log per chat** (`<journal>/diag/<session>.log`, the last 300 lines): module loads,
+  render failures and timeouts, slow renders, and renders per minute. The engine reports a failed pane
+  only to its debug log, which the desktop app keeps off; this makes a blank pane traceable. Logs of
+  chats gone for a week are dropped.
+
 ## [0.5.2] — 2026-10-17
 
 ### Fixed

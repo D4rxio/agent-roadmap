@@ -2529,6 +2529,10 @@ test('a pane whose data never comes says so in time, and a (re)loaded module ask
   on('session.start', (_$, e) => e)
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
   expect(asked.some(a => a.includes('ui.render'))).toBe(true)
+  // The load is written to this chat's diagnostics log, where a blank pane can be traced later.
+  const log = [...files.entries()].find(([path]) => path === '/home/t/.claude/roadmap/diag/session-stuck.log')?.[1] ?? ''
+  expect(log).toContain('module loaded')
+  expect(log).toContain('journal read in')
   // Data that never comes: the wait ends with a reason the pane draws, instead of the host's placeholder.
   const late = await inTime(() => Promise.resolve(), new Promise<never>(() => undefined)).then(
     () => 'drawn',
