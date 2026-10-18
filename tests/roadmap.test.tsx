@@ -2598,6 +2598,31 @@ test('the pane shows a review owed and offers the person to confirm without it',
   await ui.unmount()
 })
 
+test('a reviewer files its findings as follow-ups, also after the person accepted the review', async () => {
+  const events = [
+    { kind: 'plan', at: 1, session: 's', track: 'api', review: { required: true, independence: 'cross-model' }, phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] },
+    { kind: 'step', at: 2, session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 3, session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+    { kind: 'review', at: 4, session: 'x1', track: 'api', id: '1', actor: 'codex', verdict: 'findings', via: 'codex-sandbox' },
+    { kind: 'step', at: 5, session: 'p', track: 'api', id: '1', status: 'done', actor: 'person', origin: 'person' },
+  ] as RoadmapEvent[]
+  const r = reviewAction(
+    { events, lives: [], now: 10, session: 'x1', actor: 'codex', via: 'codex-sandbox', channel: 'cli' },
+    { step: 'api/1', verdict: 'findings', evidence: 'two loose ends', follow_ups: [{ title: 'Tighten the probe', priority: 'P2' }, { title: '' }] },
+  )
+  expect(r.ok).toBe(true)
+  expect(r.text).toMatch(/api\/f\w+ Tighten the probe/)
+  const board = fold([...events, ...r.emit], [], 99)
+  const steps = board.tracks[0]!.steps
+  // The accepted step stays done; the finding waits in the backlog, under Follow-ups, for the person.
+  expect(steps.find(x => x.id === '1')?.status).toBe('done')
+  const f = steps.find(x => x.title === 'Tighten the probe')
+  expect(f?.backlog).toBe(true)
+  expect(f?.priority).toBe('P2')
+  expect(board.tracks[0]!.phases.find(p => p.stepIds.includes(f!.id))?.name).toBe(FOLLOW_UPS)
+  expect(steps.length).toBe(2)
+})
+
 test('every review round stays visible: a fail, the fixes, the next pass', async ($, on) => {
   const plan = {
     kind: 'plan',

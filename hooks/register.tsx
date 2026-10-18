@@ -799,7 +799,7 @@ export const register: Register = on => {
         'follow-ups) or fail, with evidence. A step whose policy requires a review stays out of done until a ' +
         'review that meets its policy passes — for cross-model, the reviewer must be a different model family ' +
         'from the implementer, so a Claude session cannot satisfy it for Claude\'s own work: have Codex (or ' +
-        'another model) review and record it. Record every round, a fail included, not only the last one.',
+        'another model) review and record it. Record every round, a fail included, not only the last one. Findings to follow up go in `follow_ups`.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -808,6 +808,18 @@ export const register: Register = on => {
           evidence: { type: 'string', description: 'What the review checked and found.' },
           note: { type: 'string' },
           start: { type: 'boolean', description: 'Only say you are reviewing it now (no verdict yet): the step stays as reported.' },
+          follow_ups: {
+            type: 'array',
+            description: 'Findings to follow up: each becomes a follow-up step, set aside in the backlog for the person.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+              },
+              required: ['title'],
+            },
+          },
         },
         required: ['step'],
       },

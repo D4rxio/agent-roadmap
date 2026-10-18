@@ -17,7 +17,7 @@
 //                                       (skipped needs --reason; moved needs --to and --reason: the obligation
 //                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
-//   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …]
+//   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …] [--follow-up "title[:P1]"]…
 //   roadmap review <ref> --start        say you are reviewing it (writes nothing; never mark a step running to review it)
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
@@ -222,6 +222,14 @@ function act(run, activity) {
   process.stdout.write(r.text + '\n')
 }
 
+/** `--follow-up "title[:P1]"`, repeatable: follow-ups set aside in the backlog. */
+function followUps(flags) {
+  return [].concat(flags['follow-up'] ?? []).map(raw => {
+    const m = /^(.*?)(?::(P[0-3]))?$/.exec(String(raw))
+    return { title: (m?.[1] ?? '').trim(), priority: m?.[2] }
+  })
+}
+
 switch (command) {
   case 'status':
     act(ctx => actions.statusAction(ctx, { all: yes(flags.all) }), 'roadmap status')
@@ -292,17 +300,22 @@ switch (command) {
           shipped: flags.shipped,
           evidence: flags.evidence,
           status: yes(flags.failed) ? 'failed' : 'done',
-          follow_ups: [].concat(flags['follow-up'] ?? []).map(raw => {
-            const m = /^(.*?)(?::(P[0-3]))?$/.exec(String(raw))
-            return { title: (m?.[1] ?? '').trim(), priority: m?.[2] }
-          }),
+          follow_ups: followUps(flags),
         }),
       `roadmap done ${args[0] ?? ''}`,
     )
     break
   case 'review':
     act(
-      ctx => actions.reviewAction(ctx, { step: args[0], verdict: flags.verdict, evidence: flags.evidence, note: flags.note, start: yes(flags.start) }),
+      ctx =>
+        actions.reviewAction(ctx, {
+          step: args[0],
+          verdict: flags.verdict,
+          evidence: flags.evidence,
+          note: flags.note,
+          start: yes(flags.start),
+          follow_ups: followUps(flags),
+        }),
       `roadmap review ${args[0] ?? ''}`,
     )
     break

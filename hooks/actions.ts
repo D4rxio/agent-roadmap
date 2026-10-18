@@ -318,6 +318,29 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
 }
 
 /** Close work on a step: what shipped, the evidence, and follow-ups filed in the backlog. */
+/**
+ * Follow-ups go to the track's Follow-ups phase, set aside in the backlog: the person decides when they
+ * are worked on. Appends the events to `emit` and returns the line that lists them (empty if none).
+ */
+function addFollowUps(ctx: ActionContext, emit: RoadmapEvent[], trackName: string, input: unknown): string {
+  const raw = Array.isArray(input) ? (input as { title?: unknown; priority?: unknown }[]) : []
+  const added: string[] = []
+  let at = ctx.now + 1
+  for (const f of raw) {
+    const title = text(f.title)
+    if (!title) continue
+    const all = [...ctx.events, ...emit]
+    const track = fold(all, [], ctx.now).tracks.find(t => t.name === trackName)
+    if (!track) break
+    const id = nextId(track, all, 'f')
+    const priority = PRIORITIES.includes(f.priority as RoadmapPriority) ? (f.priority as RoadmapPriority) : undefined
+    emit.push({ kind: 'add', at: at++, session: ctx.session, track: trackName, id, title, phase: FOLLOW_UPS, origin: 'agent' })
+    emit.push({ kind: 'triage', at: at++, session: ctx.session, track: trackName, id, backlog: true, priority, origin: 'agent' })
+    added.push(`${trackName}/${id} ${title}`)
+  }
+  return added.length ? `\nFollow-ups set aside in the backlog for the person to schedule:\n${added.map(x => `- ${x}`).join('\n')}` : ''
+}
+
 export function doneAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
   const now = fold(ctx.events, [], ctx.now)
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
@@ -340,26 +363,9 @@ export function doneAction(ctx: ActionContext, input: Record<string, unknown>): 
       actor: ctx.actor,
     },
   ]
-  const raw = Array.isArray(input.follow_ups) ? (input.follow_ups as { title?: unknown; priority?: unknown }[]) : []
-  const added: string[] = []
-  let at = ctx.now + 1
-  for (const f of raw) {
-    const title = text(f.title)
-    if (!title) continue
-    const all = [...ctx.events, ...emit]
-    const track = fold(all, [], ctx.now).tracks.find(t => t.name === ref.track)
-    if (!track) break
-    const id = nextId(track, all, 'f')
-    const priority = PRIORITIES.includes(f.priority as RoadmapPriority) ? (f.priority as RoadmapPriority) : undefined
-    emit.push({ kind: 'add', at: at++, session: ctx.session, track: ref.track, id, title, phase: FOLLOW_UPS, origin: 'agent' })
-    emit.push({ kind: 'triage', at: at++, session: ctx.session, track: ref.track, id, backlog: true, priority, origin: 'agent' })
-    added.push(`${ref.track}/${id} ${title}`)
-  }
+  const ups = addFollowUps(ctx, emit, ref.track, input.follow_ups)
   const s = after(ctx, emit, ref.track, ref.id)
   const state = s?.status === 'awaiting' ? waiting(s) : (s?.status ?? status)
-  const ups = added.length
-    ? `\nFollow-ups set aside in the backlog for the person to schedule:\n${added.map(x => `- ${x}`).join('\n')}`
-    : ''
   return {
     ok: true,
     text: `${ref2} → ${state}.${ups}`,
@@ -413,7 +419,10 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
     via: ctx.via,
   }
   const ref2 = `${ref.track}/${ref.id}`
-  const s = after(ctx, [ev], ref.track, ref.id)
+  // A reviewer's findings to follow up become follow-up steps, as a worker's do with done.
+  const emit: RoadmapEvent[] = [ev]
+  const ups = addFollowUps(ctx, emit, ref.track, input.follow_ups)
+  const s = after(ctx, emit, ref.track, ref.id)
   const counts = step.review?.required
     ? qualifies(step.review, step.implementer, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now, via: ctx.via })
     : true
@@ -432,8 +441,8 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
         : s?.status
   return {
     ok: true,
-    text: `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.`,
-    emit: [ev],
+    text: `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.${ups}`,
+    emit,
     track: ref.track,
     toast: counts ? `⚖ ${ref2} reviewed: ${verdict}` : undefined,
   }

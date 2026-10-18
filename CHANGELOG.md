@@ -14,6 +14,9 @@ versions follow [Semantic Versioning](https://semver.org/).
   (`⚖ findings by codex · round 2, before: fail`) and the brief lists each round, marking those of earlier
   work. Only a review after the latest done still counts. Reviewers are told to record every round, a
   fail included, not only the last one.
+- **A reviewer files its findings as follow-ups.** `roadmap review … --follow-up "title[:P1]"` (and
+  `follow_ups` on the review tool) adds each finding as a follow-up step, set aside in the backlog, as a
+  worker's `done` does — also after the person has accepted the review.
 
 ### Changed
 - **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's
