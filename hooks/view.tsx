@@ -1,4 +1,4 @@
-import type { RoadmapBoard, RoadmapPriority, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
+import type { RoadmapBoard, RoadmapPriority, RoadmapReview, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
 import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 import type { ChainGraph, ChainNode } from './model'
 
@@ -103,6 +103,14 @@ function Line(els: Els, key: string, parts: Part[]) {
       )}
     </Box>
   )
+}
+
+/** " · round 2, before: fail": which review round this is, when there was more than one. */
+function roundOf(st: RoadmapStep, r: RoadmapReview | undefined): string {
+  const all = st.reviewRounds ?? []
+  const i = r ? all.findIndex(x => x.at === r.at && x.actor === r.actor && x.verdict === r.verdict) : -1
+  if (i < 1) return ''
+  return ` · round ${i + 1}, before: ${all.slice(0, i).map(x => x.verdict).join(', ')}`
 }
 
 function shortTitle(text: string, max = 22): string {
@@ -579,7 +587,8 @@ function needsYou(els: Els, d: PaneData) {
         <Box key={`broken-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
           {Line(els, `broken-line-${st.track}-${st.id}`, [
             { text: '↪ ', color: 'warning' },
-            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+            { text: `${st.track}/${st.id} `, bold: true },
+            { text: st.title, main: true },
           ])}
           <Text dimColor wrap="truncate-end">{`   moved to ${st.movedTo ?? '?'}, but the moves end nowhere (a loop, or a step gone) — its dependents stay blocked`}</Text>
           <Box flexDirection="row" gap={1}>
@@ -594,7 +603,8 @@ function needsYou(els: Els, d: PaneData) {
         <Box key={`stale-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
           {Line(els, `stale-line-${st.track}-${st.id}`, [
             { text: '◌ ', color: 'warning' },
-            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+            { text: `${st.track}/${st.id} `, bold: true },
+            { text: st.title, main: true },
           ])}
           <Text dimColor wrap="truncate-end">{`   running for ${st.startedAt ? duration(d.now - st.startedAt) : 'a while'}, nobody on it since ${st.lastAt ? when(st.lastAt, d.now, d.tz) : 'long ago'}${st.lastBy ? ` · last ${st.lastBy}` : ''}`}</Text>
           <Box flexDirection="row" gap={1}>
@@ -612,12 +622,13 @@ function needsYou(els: Els, d: PaneData) {
         <Box key={`await-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
           {Line(els, `await-line-${st.track}-${st.id}`, [
             { text: '◆ ', color: 'permission' },
-            { text: `${titleOf(st.track)} · ${st.id} ${st.title}`, main: true },
+            { text: `${st.track}/${st.id} `, bold: true },
+            { text: st.title, main: true },
           ])}
           {st.reviewPending ? (
-            <Text dimColor wrap="truncate-end">{`   waits for ${whoseReview(st)}${st.review?.independence === 'cross-model' ? ` — a model other than ${family(st.implementer?.actor)} must review it` : ''}${st.reviewState === 'failed' ? '; the last one failed' : ''}`}</Text>
+            <Text dimColor wrap="truncate-end">{`   waits for ${whoseReview(st)}${st.review?.independence === 'cross-model' ? ` — a model other than ${family(st.implementer?.actor)} must review it` : ''}${st.reviewState === 'failed' ? `; the last one failed${roundOf(st, st.reviews[st.reviews.length - 1])}` : ''}`}</Text>
           ) : st.reviewState === 'reviewed' && st.passedReview ? (
-            <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
+            <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${roundOf(st, st.passedReview)}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
           ) : st.proposed === 'moved' ? (
             <Text dimColor wrap="truncate-end">{st.moveProblem
               ? `   proposes moving it to ${st.movedTo ?? '?'}, but ${st.moveProblem} — reject it, or ask for another target`

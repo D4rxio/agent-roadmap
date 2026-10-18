@@ -2598,6 +2598,67 @@ test('the pane shows a review owed and offers the person to confirm without it',
   await ui.unmount()
 })
 
+test('every review round stays visible: a fail, the fixes, the next pass', async ($, on) => {
+  const plan = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'api',
+    title: 'API v2',
+    review: { required: true, independence: 'cross-model' },
+    phases: [{ name: 'P', steps: [{ id: '1', title: 'Fence' }] }],
+  }
+  const events = [
+    plan,
+    { kind: 'step', at: 1100, session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1200, session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+    { kind: 'review', at: 1300, session: 'x1', track: 'api', id: '1', actor: 'codex', verdict: 'fail', via: 'codex-sandbox', evidence: 'two holes' },
+    { kind: 'step', at: 1400, session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1500, session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+    { kind: 'review', at: 1600, session: 'x1', track: 'api', id: '1', actor: 'codex', verdict: 'findings', via: 'codex-sandbox', evidence: 'holes closed' },
+  ]
+  // The fold keeps every round; only the one after the latest done counts.
+  const step = fold(events as RoadmapEvent[], [], 9999).tracks[0]!.steps[0]!
+  expect(step.reviewRounds?.map(r => r.verdict)).toEqual(['fail', 'findings'])
+  expect(step.reviews.map(r => r.verdict)).toEqual(['findings'])
+  expect(step.reviewState).toBe('reviewed')
+  const text = brief(fold(events as RoadmapEvent[], [], 9999), 'api', '1')
+  expect(text).toContain('round 1, review by codex: fail (of earlier work) — two holes')
+  expect(text).toContain('round 2, review by codex: findings — holes closed')
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-rounds' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // The step leads its line (the track's long title used to push it out of sight).
+    expect(await ui.find({ text: /^api\/1 $/ })).toBeDefined()
+    expect(await ui.find({ text: /findings by codex \(codex-sandbox\) · round 2, before: fail — holes closed/ })).toBeDefined()
+    expect(await ui.find({ text: /^Confirm ✓$/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
 test('the pane shows a cross-model pass with its reviewer, for the person to confirm', async ($, on) => {
   const plan = {
     kind: 'plan',

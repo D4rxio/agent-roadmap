@@ -25,7 +25,9 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   brief, then record the verdict yourself: `$R review <track>/<id> --verdict pass|findings|fail --evidence "what you checked"`.
   **Never `mark … running` to review**: running means you work on the implementation — it would reopen
   the work and drop the report you came to review (the CLI refuses it without `--reopen`). To show you
-  are on it, `$R review <track>/<id> --start` (writes nothing).
+  are on it, `$R review <track>/<id> --start` (writes nothing). Record **every round**, a `fail` included,
+  not only the last one: after a fail the implementer fixes and reports done again, you review again, and
+  the person sees each round in the pane.
   A step with a cross-model policy needs a review by a different model family for the work last reported
   done (a new done needs a new review); its pass then waits for the person to confirm. The CLI records you as
   `codex` from inside Codex whatever `--actor` says; a bare `--actor` never counts as cross-model.

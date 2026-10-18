@@ -368,7 +368,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
       // A running in the same millisecond as the done may have reopened it: unsure, so no review counts.
       step.reportedAt = lastDone && lastDone.at > (lastRun?.at ?? Number.NEGATIVE_INFINITY) ? lastDone.at : undefined
       const since = step.reportedAt ?? Number.POSITIVE_INFINITY
-      step.reviews = (reviews.get(key(t.name, step.id)) ?? []).filter(r => r.at > since).sort((a, b) => a.at - b.at)
+      // Every round stays visible (a fail, the fixes, the next pass); only those after the latest done count.
+      step.reviewRounds = [...(reviews.get(key(t.name, step.id)) ?? [])].sort((a, b) => a.at - b.at)
+      step.reviews = step.reviewRounds.filter(r => r.at > since)
       if (step.review?.required) {
         const counted = step.reviews.filter(r => qualifies(step.review!, step.implementer, r))
         const latestAt = counted.length ? counted[counted.length - 1]!.at : undefined
@@ -1239,7 +1241,12 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
       : s.review
         ? 'Review: not required for this step.'
         : '',
-    ...s.reviews.map(r => `  review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`),
+    ...(s.reviewRounds ?? s.reviews).map(
+      (r, i) =>
+        `  round ${i + 1}, review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${
+          s.reportedAt === undefined || r.at <= s.reportedAt ? ' (of earlier work)' : ''
+        }${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`,
+    ),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
     dependents.length
       ? `Unblocks:${s.unblocks ? ` ${s.unblocks} open step${s.unblocks === 1 ? ' waits' : 's wait'} on it, down the chain` : ''}\n${dependents.map(x => `  ${x}`).join('\n')}`

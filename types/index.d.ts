@@ -197,6 +197,8 @@ export type RoadmapStep = {
   implementer?: { actor: string; session: string }
   /** Reviews recorded since the current attempt started, oldest first. */
   reviews: RoadmapReview[]
+  /** Every review recorded for this step, across attempts, oldest first: its review rounds. Only `reviews` count. */
+  reviewRounds?: RoadmapReview[]
   /** `satisfied` once a qualifying review passed; `missing` while one is owed; `failed` after a qualifying fail. */
   reviewState?: 'satisfied' | 'missing' | 'failed' | 'reviewed'
   /**

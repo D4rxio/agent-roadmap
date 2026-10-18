@@ -10,6 +10,14 @@ versions follow [Semantic Versioning](https://semver.org/).
   render failures and timeouts, slow renders, and renders per minute. The engine reports a failed pane
   only to its debug log, which the desktop app keeps off; this makes a blank pane traceable. Logs of
   chats gone for a week are dropped.
+- **Review rounds.** A step keeps every review it had: the pane says which round a verdict is
+  (`⚖ findings by codex · round 2, before: fail`) and the brief lists each round, marking those of earlier
+  work. Only a review after the latest done still counts. Reviewers are told to record every round, a
+  fail included, not only the last one.
+
+### Changed
+- **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's
+  long title no longer pushes the step out of sight.
 
 ## [0.5.2] — 2026-10-17
 

@@ -799,7 +799,7 @@ export const register: Register = on => {
         'follow-ups) or fail, with evidence. A step whose policy requires a review stays out of done until a ' +
         'review that meets its policy passes — for cross-model, the reviewer must be a different model family ' +
         'from the implementer, so a Claude session cannot satisfy it for Claude\'s own work: have Codex (or ' +
-        'another model) review and record it.',
+        'another model) review and record it. Record every round, a fail included, not only the last one.',
       inputSchema: {
         type: 'object',
         properties: {
