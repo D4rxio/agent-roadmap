@@ -23,6 +23,12 @@ versions follow [Semantic Versioning](https://semver.org/).
   worker's `done` does — also after the person has accepted the review.
 
 ### Changed
+- **Done, Backlog and Abandoned are three things.** A track whose every step is done, skipped or moved
+  says **✓ Done** (done is done, whatever was decided on the way) and offers **Close**. Backlog is what will
+  be done later. **Abandon** (it was "Archive") drops an unfinished track, which then says where it stopped
+  (`closed at 40%`). The Backlog tab lists closed tracks under **Done** and dropped ones under **Abandoned**,
+  brought back with **↺ Reopen** or **↺ Resume**; the agents' summary tells them apart too. Same journal
+  event as before: nothing to migrate.
 - **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's
   long title no longer pushes the step out of sight.
 

@@ -102,8 +102,10 @@ or let it read and update one as it works. The pane opens on its own in the desk
   the folded steps, and **⤢ Wide** to open the diagram alone in a wide pane (Esc closes it). No dates,
   no time axis. **⧉ Copy as Mermaid** gives the same diagram as a
   ```` ```mermaid ```` block that GitHub, GitLab and Gitea render — paste it into a PR, an issue or a doc.
-- **Backlog.** Everything set aside, tracks and steps, with **↺ Restore**; archived tracks, with
-  **↺ Unarchive**.
+- **Done, Backlog, Abandoned.** A track is **✓ Done** when every step is done, skipped or moved — done
+  is done, whatever was decided on the way; **Close** puts it away. **Backlog** is what will be done
+  later (**↺ Restore** brings it back). **Abandon** drops an unfinished track: it shows where it stopped
+  (`closed at 40%`). The Backlog tab lists all three apart; **↺ Reopen** and **↺ Resume** bring a track back.
 - **Projects.** Tracks belong to the repository they were laid out from (worktrees count as one). The
   pane shows this chat's project — plus tracks in no project — with a row to switch to another or **All**;
   hover a track header for **⌂** to move it to another project. Chats working in other projects stay out

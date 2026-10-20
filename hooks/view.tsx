@@ -745,6 +745,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
   const { Box, Text, Button } = els
   const { done, total } = progress(t)
   const pct = total ? Math.round((done / total) * 100) : 0
+  const finished = isFinished(t)
   const isOpen = only ? true : d.expanded.includes(t.name)
   const active = t.steps.filter(s => !s.backlog)
   const shelved = t.steps.filter(s => s.backlog && (!only || only.has(s.id))).sort(byPriority)
@@ -768,7 +769,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
       <Box flexDirection="row" gap={1}>
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
           {Btn(els, d, { key: `fold-${t.name}`, plain: true, onPress: () => d.onToggle(t.name) }, `${isOpen ? '▾' : '▸'} ${t.title}`, <Text>{`${isOpen ? '▾' : '▸'} `}
-            <Text bold color={done === total && total > 0 ? 'success' : undefined}>
+            <Text bold color={finished ? 'success' : undefined}>
               {t.title}
             </Text></Text>)}
         </Box>
@@ -784,22 +785,32 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
                 return Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, label, <Text><Text dimColor>{label}</Text></Text>)
               })()
             : null}
-          {!t.archived && !(done === total && total > 0)
-            ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Archive', <Text><Text dimColor>Archive</Text></Text>)
+          {!t.archived && !finished
+            ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Abandon', <Text><Text dimColor>Abandon</Text></Text>)
             : null}
         </Box>
-        {/* A finished track offers its archive outright: that is the usual next step for it. */}
-        {!t.archived && done === total && total > 0
-          ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Archive', <Text><Text color="success">Archive</Text></Text>)
+        {/* A finished track offers to close it outright: that is the usual next step for it. Closing a
+            finished track and abandoning an unfinished one are the same put-away; the Backlog tab tells
+            them apart by whether the work was done. */}
+        {!t.archived && finished
+          ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, true) }, 'Close', <Text><Text color="success">Close</Text></Text>)
           : null}
         {t.archived
-          ? Btn(els, d, { key: `tunarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, false) }, 'Unarchive', <Text><Text color="suggestion">↺ Unarchive</Text></Text>)
+          ? Btn(els, d, { key: `tunarchive-${t.name}`, plain: true, onPress: () => d.onArchive(t.name, false) }, finished ? 'Reopen' : 'Resume', <Text><Text color="suggestion">{finished ? '↺ Reopen' : '↺ Resume'}</Text></Text>)
           : null}
         {t.backlog ? (
           Btn(els, d, { key: `trestore-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, false) }, "Restore", <Text><Text color="suggestion">↺ Restore</Text></Text>)
         ) : null}
         {Btn(els, d, { key: `tprio-${t.name}`, plain: true, onPress: () => d.onTrackPriority(t.name, nextPriority(t.priority)) }, t.priority ?? "P·", <Text>{t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>P·</Text>}</Text>)}
-        <Text bold>{`${pct}%`}</Text>
+        {/* Done is done: every step finished, skipped or moved, whatever was decided on the way. An archived
+            track that was not says where it stopped. */}
+        {finished ? (
+          <Text bold color="success">✓ Done</Text>
+        ) : t.archived ? (
+          <Text dimColor>{`closed at ${pct}%`}</Text>
+        ) : (
+          <Text bold>{`${pct}%`}</Text>
+        )}
         <Text dimColor>{`${done}/${total}`}</Text>
       </Box>
       {Bar(els, d, `bar-${t.name}`, active)}
@@ -1085,12 +1096,20 @@ function daysView(els: Els, d: PaneData) {
   )
 }
 
+/** Done is done: every step finished, skipped or moved, whatever was decided on the way. */
+function isFinished(t: RoadmapTrack): boolean {
+  const { done, total } = progress(t)
+  return total > 0 && done === total
+}
+
 function backlogView(els: Els, d: PaneData) {
   const { Box, Text } = els
   const shelved = d.board.tracks.filter(t => !t.archived).flatMap(t => t.steps.filter(s => s.backlog).map(s => ({ t, s })))
   shelved.sort((a, b) => byPriority(a.s, b.s))
   const shelvedTracks = d.board.tracks.filter(t => t.backlog && !t.archived)
   const archivedTracks = d.board.tracks.filter(t => t.archived)
+  const closed = archivedTracks.filter(isFinished)
+  const abandoned = archivedTracks.filter(t => !isFinished(t))
   if (shelved.length === 0 && shelvedTracks.length === 0 && archivedTracks.length === 0) {
     return (
       <Box key="backlog" flexDirection="column">
@@ -1100,7 +1119,7 @@ function backlogView(els: Els, d: PaneData) {
   }
   return (
     <Box key="backlog" flexDirection="column">
-      <Text dimColor>Set aside: not counted in progress, not offered to agents as next work.</Text>
+      <Text dimColor>Set aside for later: not counted in progress, not offered to agents as next work until brought back.</Text>
       {shelvedTracks.length ? (
         <Box key="bl-tracks" flexDirection="column" marginTop={1}>
           <Text bold>Tracks</Text>
@@ -1114,11 +1133,18 @@ function backlogView(els: Els, d: PaneData) {
           {stepRow(els, d, t, s)}
         </Box>
       ))}
-      {archivedTracks.length ? (
+      {closed.length ? (
+        <Box key="bl-closed" flexDirection="column" marginTop={1}>
+          <Text bold color="success">Done</Text>
+          <Text dimColor>Finished and closed: every step done, skipped or moved. ↺ Reopen brings one back.</Text>
+          {closed.map(t => trackCard(els, d, t))}
+        </Box>
+      ) : null}
+      {abandoned.length ? (
         <Box key="bl-archived" flexDirection="column" marginTop={1}>
-          <Text bold>Archived</Text>
-          <Text dimColor>Closed by you: hidden from the list, the status line and the agents. ↺ Unarchive brings one back.</Text>
-          {archivedTracks.map(t => trackCard(els, d, t))}
+          <Text bold>Abandoned</Text>
+          <Text dimColor>Started and dropped: hidden from the list, the status line and the agents. ↺ Resume brings one back.</Text>
+          {abandoned.map(t => trackCard(els, d, t))}
         </Box>
       ) : null}
     </Box>

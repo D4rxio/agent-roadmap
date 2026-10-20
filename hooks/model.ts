@@ -1333,8 +1333,15 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
     )
   }
   const archivedTracks = board.tracks.filter(x => x.archived)
-  if (archivedTracks.length) {
-    lines.push(`- archived tracks (closed by the person, not to work on): ${archivedTracks.map(x => x.name).join(', ')}`)
+  const finished = (t: RoadmapTrack) => {
+    const { done, total } = progress(t)
+    return total > 0 && done === total
+  }
+  const closed = archivedTracks.filter(finished)
+  const abandoned = archivedTracks.filter(x => !finished(x))
+  if (closed.length) lines.push(`- finished tracks the person closed: ${closed.map(x => x.name).join(', ')}`)
+  if (abandoned.length) {
+    lines.push(`- abandoned tracks (started, then dropped by the person; not to work on): ${abandoned.map(x => x.name).join(', ')}`)
   }
   const shelvedTracks = board.tracks.filter(x => x.backlog && !x.archived)
   if (shelvedTracks.length) {

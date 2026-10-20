@@ -620,7 +620,16 @@ async function personPlace($: EngineInterface, track: string, project: string | 
 
 async function personArchive($: EngineInterface, track: string, archived: boolean) {
   await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, archived, origin: 'person' })
-  $.ui.toast(archived ? `${track} archived — the Backlog tab brings it back` : `↺ ${track} unarchived`)
+  const t = (await read($, board)).tracks.find(x => x.name === track)
+  const p = t ? progress(t) : undefined
+  const done = !!p && p.total > 0 && p.done === p.total
+  $.ui.toast(
+    archived
+      ? done
+        ? `✓ ${track} closed — under Done in the Backlog tab`
+        : `${track} abandoned — the Backlog tab brings it back`
+      : `↺ ${track} back on the list`,
+  )
 }
 
 async function personStatus($: EngineInterface, track: string, id: string, status: RoadmapStatus) {

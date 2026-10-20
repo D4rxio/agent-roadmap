@@ -190,7 +190,7 @@ test('the person confirms an awaiting checkpoint from the pane', async ($, on) =
   expect(await ui.find({ text: /1 to confirm/ })).toBeDefined()
   await ui.press({ key: 'ok-release-1' })
   expect(await ui.find({ text: /0 to confirm/ })).toBe(undefined)
-  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -973,10 +973,10 @@ test('Done ✓ marks a step completed in one press, a checkpoint included; done 
       await ui.press({ key: 'done-api/1' })
       expect(await ui.find({ text: /50%/ })).toBeDefined()
       await ui.press({ key: 'done-api/2' })
-      expect(await ui.find({ text: /100%/ })).toBeDefined()
+      expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
       expect(await ui.find({ key: 'done-api/1' })).toBe(undefined)
     } else {
-      expect(await ui.find({ text: /100%/ })).toBeDefined()
+      expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
     }
     await ui.unmount()
   }
@@ -1178,7 +1178,12 @@ test('archive: the person alone archives a track; it leaves the list and the age
   const archived = fold([PLAN, other, tri(2000, 'api', { archived: true }, 'person')], [], 9000)
   expect(archived.tracks.find(t => t.name === 'api')?.archived).toBe(true)
   expect(summary(archived)).not.toContain('api/1.1')
-  expect(summary(archived)).toContain('archived tracks (closed by the person, not to work on): api')
+  expect(summary(archived)).toContain('abandoned tracks (started, then dropped by the person; not to work on): api')
+  // Done is done: a track whose steps are all done, skipped or moved is a finished one the person closed.
+  const word = (at: number, id: string, status: string) => ({ kind: 'step', at, session: 'p', track: 'api', id, status, origin: 'person' }) as RoadmapEvent
+  const closed = fold([PLAN, other, word(1500, '1.1', 'done'), word(1600, '1.2', 'skipped'), tri(2000, 'api', { archived: true }, 'person')], [], 9000)
+  expect(summary(closed)).toContain('finished tracks the person closed: api')
+  expect(summary(closed)).not.toContain('abandoned')
   // An agent cannot archive, nor bring back what the person archived.
   expect(fold([PLAN, tri(2000, 'api', { archived: true }, 'agent')], [], 9000).tracks[0]?.archived).toBe(false)
   const back = fold([PLAN, tri(2000, 'api', { archived: true }, 'person'), tri(3000, 'api', { archived: false }, 'agent')], [], 9000)
@@ -1203,7 +1208,7 @@ test('stale: running with nobody on it for hours is flagged; a recent holder or 
   expect(brief(b, 'api', '1.1')).toContain('Stale: marked running')
 })
 
-test('from the pane: archive a finished track, find it under Archived, bring it back; a stale step offers its way out', async ($, on) => {
+test('from the pane: close a finished track, abandon an unfinished one, find them apart, bring them back; a stale step offers its way out', async ($, on) => {
   const old = Date.now() - 3 * 3_600_000
   const events = [
     PLAN,
@@ -1238,13 +1243,20 @@ test('from the pane: archive a finished track, find it under Archived, bring it 
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    // The finished track offers Archive; archiving hides it from the list.
+    // The finished track says it is done and offers Close; closing hides it from the list.
     expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
     await ui.press({ key: 'tarchive-api' })
     expect(await ui.find({ text: /API v2/ })).toBe(undefined)
+    // The unfinished one is abandoned instead: put away too, but apart, saying where it stopped.
+    await ui.press({ key: 'tarchive-web' })
     await ui.press({ key: 'view-backlog' })
-    expect(await ui.find({ text: /^Archived$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Done$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Abandoned$/ })).toBeDefined()
+    expect(await ui.find({ text: /closed at 0%/ })).toBeDefined()
+    expect(await ui.find({ text: /Archived/ })).toBe(undefined)
     await ui.press({ key: 'tunarchive-api' })
+    await ui.press({ key: 'tunarchive-web' })
     await ui.press({ key: 'view-tracks' })
     expect(await ui.find({ text: /API v2/ })).toBeDefined()
     // The step left running for hours is stale: Needs you offers it back to todo.
@@ -2658,7 +2670,7 @@ test('the pane shows a review owed and offers the person to confirm without it',
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'ok-api-1' })
   expect(await ui.find({ text: /Confirm without/ })).toBe(undefined)
-  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -2801,7 +2813,7 @@ test('the pane shows a cross-model pass with its reviewer, for the person to con
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'ok-api-1' })
   expect(await ui.find({ text: /Confirm ✓/ })).toBe(undefined)
-  expect(await ui.find({ text: /100%/ })).toBeDefined()
+  expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
   await ui.unmount()
 })
 
