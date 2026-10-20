@@ -133,6 +133,11 @@ export type RoadmapEvent =
       backlog?: boolean
       /** A whole track archived (true) or brought back (false). The person's word only. */
       archived?: boolean
+      /**
+       * A whole track declared done by the person (true), even with steps left open, or no longer (false).
+       * The person's word only; it comes with `archived: true`, so the track leaves the list as done.
+       */
+      done?: boolean
       /** A whole track put in a project (its key), or taken out of any (null). The person's word only. */
       project?: string | null
       origin?: RoadmapOrigin
@@ -235,6 +240,8 @@ export type RoadmapTrack = {
   backlog: boolean
   /** Archived by the person: hidden everywhere but the Backlog tab and history, restorable. */
   archived: boolean
+  /** The person declared it done, whatever its steps say (see `trackDone`). */
+  doneByPerson?: boolean
   triagedBy?: string
   /** The step to pick up next: open, not waiting on anything, nobody on it — most urgent, then most unblocking. */
   next?: string

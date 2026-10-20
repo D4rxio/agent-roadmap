@@ -536,6 +536,9 @@ test('from the pane: a track goes to the backlog tab and is restored from there'
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'tprio-api' })
     expect(await ui.find({ text: /^P3$/ })).toBeDefined()
+    // The track's actions wait under "⋯", so they never crowd its title.
+    expect(await ui.find({ key: 'tshelve-api' })).toBe(undefined)
+    await ui.press({ key: 'tmenu-api' })
     await ui.press({ key: 'tshelve-api' })
     expect(await ui.find({ text: /API v2/ })).toBe(undefined)
     await ui.press({ key: 'view-backlog' })
@@ -1013,8 +1016,11 @@ test('Copy puts a track title, or a step as "#track/id title", on the clipboard 
   await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tmenu-api' })
   await ui.press({ key: 'tcopy-api' })
   expect(copied.at(-1)).toBe('API v2')
+  // The action closed the row.
+  expect(await ui.find({ key: 'tcopy-api' })).toBe(undefined)
   expect(await ui.find({ text: /Map endpoints/ })).toBe(undefined)
   await ui.press({ key: 'fold-api' })
   await ui.press({ key: 'scopy-api/1.2' })
@@ -1182,7 +1188,14 @@ test('archive: the person alone archives a track; it leaves the list and the age
   // Done is done: a track whose steps are all done, skipped or moved is a finished one the person closed.
   const word = (at: number, id: string, status: string) => ({ kind: 'step', at, session: 'p', track: 'api', id, status, origin: 'person' }) as RoadmapEvent
   const closed = fold([PLAN, other, word(1500, '1.1', 'done'), word(1600, '1.2', 'skipped'), tri(2000, 'api', { archived: true }, 'person')], [], 9000)
-  expect(summary(closed)).toContain('finished tracks the person closed: api')
+  expect(summary(closed)).toContain('done tracks the person closed (not to work on): api')
+  // … and so is one the person declared done, open steps and all; an agent's word on it counts for nothing.
+  const declared = fold([PLAN, other, tri(2000, 'api', { archived: true, done: true }, 'person')], [], 9000)
+  expect(declared.tracks.find(t => t.name === 'api')?.doneByPerson).toBe(true)
+  expect(summary(declared)).toContain('done tracks the person closed (not to work on): api')
+  expect(fold([PLAN, tri(2000, 'api', { done: true }, 'agent')], [], 9000).tracks[0]?.doneByPerson).toBeFalsy()
+  const reopened = fold([PLAN, tri(2000, 'api', { archived: true, done: true }, 'person'), tri(3000, 'api', { archived: false, done: false }, 'person')], [], 9000)
+  expect(reopened.tracks[0]?.doneByPerson).toBeFalsy()
   expect(summary(closed)).not.toContain('abandoned')
   // An agent cannot archive, nor bring back what the person archived.
   expect(fold([PLAN, tri(2000, 'api', { archived: true }, 'agent')], [], 9000).tracks[0]?.archived).toBe(false)
@@ -1248,17 +1261,31 @@ test('from the pane: close a finished track, abandon an unfinished one, find the
     expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
     await ui.press({ key: 'tarchive-api' })
     expect(await ui.find({ text: /API v2/ })).toBe(undefined)
-    // The unfinished one is abandoned instead: put away too, but apart, saying where it stopped.
+    // The unfinished one is abandoned instead (under "⋯"): put away too, but apart, saying where it stopped.
+    await ui.press({ key: 'tmenu-web' })
     await ui.press({ key: 'tarchive-web' })
-    await ui.press({ key: 'view-backlog' })
-    expect(await ui.find({ text: /^Done$/ })).toBeDefined()
+    expect(await ui.find({ text: /Done 1/ })).toBeDefined()
+    await ui.press({ key: 'view-done' })
+    expect(await ui.find({ text: /API v2/ })).toBeDefined()
     expect(await ui.find({ text: /^Abandoned$/ })).toBeDefined()
     expect(await ui.find({ text: /closed at 0%/ })).toBeDefined()
-    expect(await ui.find({ text: /Archived/ })).toBe(undefined)
     await ui.press({ key: 'tunarchive-api' })
+    await ui.press({ key: 'tunarchive-web' })
+    // Done ✓ under "⋯" closes an unfinished track as done, by the person's word: it is done, not abandoned.
+    await ui.press({ key: 'view-tracks' })
+    await ui.press({ key: 'tmenu-web' })
+    await ui.press({ key: 'tdone-web' })
+    expect(await ui.find({ text: /Web app/ })).toBe(undefined)
+    await ui.press({ key: 'view-done' })
+    expect(await ui.find({ text: /Web app/ })).toBeDefined()
+    expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
+    expect(await ui.find({ text: /^Abandoned$/ })).toBe(undefined)
+    // Reopening takes the word back: on the list again, unfinished.
     await ui.press({ key: 'tunarchive-web' })
     await ui.press({ key: 'view-tracks' })
     expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    expect(await ui.find({ text: /Web app/ })).toBeDefined()
+    expect(await ui.find({ text: /^0%$/ })).toBeDefined()
     // The step left running for hours is stale: Needs you offers it back to todo.
     expect(await ui.find({ text: /1 stale/ })).toBeDefined()
     if (surface === 'desktop') {
@@ -1881,6 +1908,7 @@ test('the pane shows this chat\'s project, switches to another or All, and place
   expect(await ui.find({ text: /WEB/ })).toBeDefined()
   expect(await ui.find({ text: /API/ })).toBeDefined()
   // Placing the unplaced track: the first press puts it in the first project.
+  await ui.press({ key: 'tmenu-docs' })
   await ui.press({ key: 'tplace-docs' })
   expect([...files.values()].some(t => t.includes('"kind":"triage"') && t.includes('"project":"/repos/api"') && t.includes('"origin":"person"'))).toBe(true)
   await ui.unmount()

@@ -15,6 +15,7 @@ import {
   fold,
   forProject,
   progress,
+  trackDone,
   refInText,
   summary,
   boardMarkdown,
@@ -532,7 +533,8 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
     onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
     onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
     onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
-    onArchive: (track, archived) => void personArchive($, track, archived),
+    onArchive: (track, archived, done) => void personArchive($, track, archived, done),
+    onTrackDone: (track: string) => void personArchive($, track, true, true),
     onWide: () => void openChains($),
   }
 }
@@ -618,16 +620,19 @@ async function personPlace($: EngineInterface, track: string, project: string | 
   $.ui.toast(`⌂ ${track} → ${name}`)
 }
 
-async function personArchive($: EngineInterface, track: string, archived: boolean) {
-  await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, archived, origin: 'person' })
+/**
+ * The person puts a track away or brings it back. `done` closes it as done whatever its steps say (true),
+ * or takes that word back (false: abandoning, reopening); absent, the steps decide.
+ */
+async function personArchive($: EngineInterface, track: string, archived: boolean, done?: boolean) {
+  await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, archived, ...(done === undefined ? {} : { done }), origin: 'person' })
   const t = (await read($, board)).tracks.find(x => x.name === track)
-  const p = t ? progress(t) : undefined
-  const done = !!p && p.total > 0 && p.done === p.total
+  const finished = done === true || (done === undefined && !!t && trackDone(t))
   $.ui.toast(
     archived
-      ? done
-        ? `✓ ${track} closed — under Done in the Backlog tab`
-        : `${track} abandoned — the Backlog tab brings it back`
+      ? finished
+        ? `✓ ${track} done — in the Done tab`
+        : `${track} abandoned — in the Done tab, under Abandoned`
       : `↺ ${track} back on the list`,
   )
 }

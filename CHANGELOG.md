@@ -26,9 +26,13 @@ versions follow [Semantic Versioning](https://semver.org/).
 - **Done, Backlog and Abandoned are three things.** A track whose every step is done, skipped or moved
   says **✓ Done** (done is done, whatever was decided on the way) and offers **Close**. Backlog is what will
   be done later. **Abandon** (it was "Archive") drops an unfinished track, which then says where it stopped
-  (`closed at 40%`). The Backlog tab lists closed tracks under **Done** and dropped ones under **Abandoned**,
-  brought back with **↺ Reopen** or **↺ Resume**; the agents' summary tells them apart too. Same journal
-  event as before: nothing to migrate.
+  (`closed at 40%`). A new **Done** tab lists closed tracks, and abandoned ones below them; **↺ Reopen** or
+  **↺ Resume** brings one back; the agents' summary tells them apart too. Old archived tracks fall into
+  Done or Abandoned by their steps: nothing to migrate.
+- **Close a track as done yourself.** **⋯ → Done ✓** closes a track as done even with steps left open
+  (a triage `done: true`, the person's word only), when the decision was made elsewhere.
+- **A track's actions moved under ⋯.** Copy, Backlog, ⌂ project and Abandon no longer crowd the title on
+  hover: one **⋯** opens them in a row under it, and each action closes the row.
 - **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's
   long title no longer pushes the step out of sight.
 

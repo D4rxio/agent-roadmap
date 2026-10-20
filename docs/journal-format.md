@@ -92,7 +92,10 @@ Any tool may read it, and append to it under the same rules, so other agents and
   never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
   review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
   accident; it does not prove them, which is why a cross-model pass waits for the person.
-- `archived` (track-level `triage`, the person's only) hides a track; a later `archived: false` brings it back.
+- `archived` (track-level `triage`, the person's only) puts a track away; a later `archived: false` brings it back.
+  Put away with every step done, skipped or moved, it is done; otherwise abandoned.
+- `done` (track-level `triage`, the person's only, sent with `archived: true`) closes a track as done whatever
+  its steps say; `done: false` takes that back (sent when the person abandons or reopens a track).
 - **Projects.** `session`, `plan` and live files may carry `project`: the folder of the main repository the
   writer works in (found through git's common dir, so every worktree of one repository is one project;
   outside git, the working folder). A track's project is, in order: the person's track-level `triage` with

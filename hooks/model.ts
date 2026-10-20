@@ -699,6 +699,7 @@ function applyTriage(
   const prio = new Map<string, Said & { value: RoadmapPriority | null }>()
   const back = new Map<string, Said & { value: boolean }>()
   const archived = new Map<string, boolean>()
+  const declared = new Map<string, boolean>()
   const placed = new Map<string, string | null>()
   const wins = (old: Said | undefined, next: Said) => !old || (next.person ? true : !old.person)
   for (const e of sorted) {
@@ -714,6 +715,8 @@ function applyTriage(
     }
     // Archiving is the person's decision alone: a worker's word on it is ignored.
     if (e.archived !== undefined && person && e.id === undefined) archived.set(e.track, e.archived)
+    // And so is declaring a whole track done.
+    if (e.done !== undefined && person && e.id === undefined) declared.set(e.track, e.done)
     // So is placing a track in a project.
     if (e.project !== undefined && person && e.id === undefined) placed.set(e.track, e.project)
   }
@@ -723,6 +726,7 @@ function applyTriage(
     t.priority = tp?.value ?? undefined
     t.backlog = tb?.value === true
     t.archived = archived.get(t.name) === true
+    t.doneByPerson = declared.get(t.name) === true || undefined
     if (placed.has(t.name)) {
       t.project = placed.get(t.name) ?? undefined
       t.projectBy = 'you'
@@ -1263,6 +1267,16 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
 }
 
 /** The track's progress over the steps that count: backlog, skipped and moved steps are set aside. */
+/**
+ * Done is done: every step finished, skipped or moved, whatever was decided on the way — or the person
+ * declared the track done themselves.
+ */
+export function trackDone(track: RoadmapTrack): boolean {
+  if (track.doneByPerson) return true
+  const { done, total } = progress(track)
+  return total > 0 && done === total
+}
+
 export function progress(track: RoadmapTrack): { done: number; total: number } {
   const active = track.steps.filter(s => !s.backlog && s.status !== 'skipped' && s.status !== 'moved')
   return { done: active.filter(s => s.status === 'done').length, total: active.length }
@@ -1333,13 +1347,9 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
     )
   }
   const archivedTracks = board.tracks.filter(x => x.archived)
-  const finished = (t: RoadmapTrack) => {
-    const { done, total } = progress(t)
-    return total > 0 && done === total
-  }
-  const closed = archivedTracks.filter(finished)
-  const abandoned = archivedTracks.filter(x => !finished(x))
-  if (closed.length) lines.push(`- finished tracks the person closed: ${closed.map(x => x.name).join(', ')}`)
+  const closed = archivedTracks.filter(trackDone)
+  const abandoned = archivedTracks.filter(x => !trackDone(x))
+  if (closed.length) lines.push(`- done tracks the person closed (not to work on): ${closed.map(x => x.name).join(', ')}`)
   if (abandoned.length) {
     lines.push(`- abandoned tracks (started, then dropped by the person; not to work on): ${abandoned.map(x => x.name).join(', ')}`)
   }
