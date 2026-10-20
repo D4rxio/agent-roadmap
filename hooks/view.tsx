@@ -571,8 +571,13 @@ function header(els: Els, d: PaneData) {
       )}
       {tab('done', `Done ${d.board.tracks.filter(t => t.archived && trackDone(t)).length}`)}
       <Box flexGrow={1} />
-      {/* Short, so the tabs never get cut: the whole roadmap (the project shown) as Markdown. */}
-      {Btn(els, d, { key: 'copy-all', plain: true, onPress: (press: any) => d.onCopyAll(press?.surface ?? 'desktop') }, '⧉ Copy', <Text><Text dimColor>⧉ Copy</Text></Text>)}
+      {/* Copies what the tab shows, as Markdown, and says which; Chains has its own Copy as Mermaid. */}
+      {d.view === 'chains'
+        ? null
+        : (() => {
+            const label = `⧉ Copy ${d.view === 'tracks' ? 'tracks' : d.view}`
+            return Btn(els, d, { key: 'copy-all', plain: true, onPress: (press: any) => d.onCopyAll(press?.surface ?? 'desktop') }, label, <Text><Text dimColor>{label}</Text></Text>)
+          })()}
     </Box>
     </Box>
   )

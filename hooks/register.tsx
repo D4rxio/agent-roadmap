@@ -19,6 +19,7 @@ import {
   refInText,
   summary,
   boardMarkdown,
+  viewMarkdown,
   nextPersonId,
   trackMarkdown,
 } from './model'
@@ -510,8 +511,11 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
       })(),
     onCopyAll: surface =>
       void (async () => {
-        const done = await $.ui.copy({ text: boardMarkdown(forProject(await read($, board), shown), Date.now(), tz), surface: surface as never })
-        $.ui.toast(done.isCopied ? '⧉ Roadmap copied' : `Could not copy: ${done.reason}`)
+        // What the tab shows, not the whole roadmap: Tracks, Backlog, Done or Days.
+        const tab = String(await read($, view))
+        const text = viewMarkdown(forProject(await read($, board), shown), tab, Date.now(), tz)
+        const done = await $.ui.copy({ text, surface: surface as never })
+        $.ui.toast(done.isCopied ? `⧉ ${tab === 'tracks' ? 'Tracks' : tab === 'days' ? 'Days' : tab === 'done' ? 'Done' : 'Backlog'} copied` : `Could not copy: ${done.reason}`)
       })(),
     onCopyText: (text, surface) =>
       void (async () => {

@@ -87,11 +87,12 @@ or let it read and update one as it works. The pane opens on its own in the desk
   - Click the `P·` chip to raise its priority: P3 → P2 → P1 → P0.
   - Hover a step for **Copy** (`#track/id title`, ready for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
     **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
-  - Hover a track header for **Copy** (its title), **Backlog** (set the whole track aside) or **Archive**
-    (hide it; a finished track offers it outright).
+  - Hover a track header for **⋯**: its actions open in a row under the title (see below); a finished
+    track offers **Close** outright.
   - **+ Add an item** at the bottom of a track adds your own step, marked **✎ you**. Agents may refine
     it, but they never lose it.
-  - **⧉ Copy as Markdown** copies one track.
+  - **⧉ Copy as Markdown** copies one track; the header's **⧉ Copy tracks / backlog / done / days** copies
+    what the tab shows.
 - **Days.** Steps done per day over the last two weeks, and what happened each day: done, started,
   sessions, agents.
 - **Chains.** One track at a time — this chat's by default, the others a click away — as boxes and arrows

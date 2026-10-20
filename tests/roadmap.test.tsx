@@ -4,7 +4,7 @@ import { checkMove, doneAction, markAction, planAction, reviewAction, statusActi
 import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, matches, whoseReview } from '../hooks/view'
 
-import { FOLLOW_UPS, STALE_MS, rankFor, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, rankFor, viewMarkdown, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -1042,7 +1042,54 @@ test('Copy puts a track title, or a step as "#track/id title", on the clipboard 
   await ui.press({ key: 'scopy-api/1.2' })
   expect(copied.at(-1)).toBe('#api/1.2 Pagination')
   expect(await ui.find({ text: /Map endpoints/ })).toBeDefined()
+  // The header's Copy copies what the tab shows, and says which.
+  await ui.press({ key: 'copy-all' })
+  expect(copied.at(-1)).toContain('## API v2')
+  await ui.press({ key: 'view-backlog' })
+  expect(await ui.find({ text: /⧉ Copy backlog/ })).toBeDefined()
+  await ui.press({ key: 'copy-all' })
+  expect(copied.at(-1)).toBe('The backlog is empty.')
+  await ui.press({ key: 'view-done' })
+  await ui.press({ key: 'copy-all' })
+  expect(copied.at(-1)).toBe('Nothing closed yet.')
+  await ui.press({ key: 'view-chains' })
+  expect(await ui.find({ key: 'copy-all' })).toBe(undefined)
+  await ui.press({ key: 'view-tracks' })
   await ui.unmount()
+})
+
+test('a tab as Markdown: tracks without the backlog, the backlog, done apart from abandoned, the days', async () => {
+  const other = { ...PLAN, track: 'docs', title: 'Docs', at: 1100 } as RoadmapEvent
+  const web = { ...PLAN, track: 'web', title: 'Web', at: 1200 } as RoadmapEvent
+  const tri = (at: number, track: string, change: object, id?: string) =>
+    ({ kind: 'triage', at, session: 'p', track, ...(id ? { id } : {}), ...change, origin: 'person' }) as RoadmapEvent
+  const now = 10 * 86_400_000
+  const board = fold(
+    [
+      PLAN,
+      other,
+      web,
+      tri(2000, 'docs', { backlog: true }),
+      tri(2001, 'api', { backlog: true }, '1.2'),
+      tri(2002, 'web', { archived: true, done: true }),
+      { kind: 'step', at: now - 1000, session: 's', track: 'api', id: '1.1', status: 'done', origin: 'person' } as RoadmapEvent,
+    ],
+    [],
+    now,
+  )
+  const tracks = viewMarkdown(board, 'tracks', now, 0)
+  expect(tracks).toContain('## API v2')
+  expect(tracks).not.toContain('## Docs')
+  expect(tracks).not.toContain('## Web')
+  const backlog = viewMarkdown(board, 'backlog', now, 0)
+  expect(backlog).toContain('- api/1.2 Pagination')
+  expect(backlog).toContain('## Docs')
+  expect(backlog).not.toContain('## API v2')
+  const done = viewMarkdown(board, 'done', now, 0)
+  expect(done).toContain('# Done')
+  expect(done).toContain('## Web')
+  expect(done).not.toContain('# Abandoned')
+  expect(viewMarkdown(board, 'days', now, 0)).toContain('- ✓ api/1.1 Map endpoints')
 })
 
 test('the shared actions hold the rules once, for the Claude tools and the CLI alike', async () => {

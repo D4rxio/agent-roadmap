@@ -1573,6 +1573,38 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
   return lines.join('\n').trim()
 }
 
+/** What a tab of the pane shows, as Markdown: Tracks, Backlog, Done or Days (what the Copy in its header copies). */
+export function viewMarkdown(board: RoadmapBoard, view: string, now: number, offsetMin: number): string {
+  if (view === 'days') {
+    const mark: Record<DayEntry['kind'], string> = { done: '✓', started: '◐', failed: '✗', awaiting: '◆', skipped: '⊖', moved: '↪', session: '●', agent: '⚙' }
+    const out = days(board, now, offsetMin).map(d =>
+      [`## ${d.label}${d.done ? ` — ${d.done} done` : ''}`, '', ...d.entries.map(e => `- ${mark[e.kind]} ${e.text}`)].join('\n'),
+    )
+    return out.join('\n\n') || 'Nothing in the last two weeks.'
+  }
+  if (view === 'backlog') {
+    const whole = board.tracks.filter(t => t.backlog && !t.archived)
+    const steps = board.tracks.filter(t => !t.archived).flatMap(t => t.steps.filter(s => s.backlog).map(s => ({ t, s })))
+    const parts = [
+      ...(steps.length
+        ? [['## Steps set aside', '', ...steps.map(({ t, s }) => `- ${s.priority ? `**${s.priority}** ` : ''}${t.name}/${s.id} ${s.title}`)].join('\n')]
+        : []),
+      ...whole.map(t => trackMarkdown(t, now, offsetMin, board)),
+    ]
+    return parts.join('\n\n') || 'The backlog is empty.'
+  }
+  if (view === 'done') {
+    const closed = board.tracks.filter(t => t.archived && trackDone(t))
+    const abandoned = board.tracks.filter(t => t.archived && !trackDone(t))
+    const parts = [
+      ...(closed.length ? ['# Done', ...closed.map(t => trackMarkdown(t, now, offsetMin, board))] : []),
+      ...(abandoned.length ? ['# Abandoned', ...abandoned.map(t => trackMarkdown(t, now, offsetMin, board))] : []),
+    ]
+    return parts.join('\n\n') || 'Nothing closed yet.'
+  }
+  return board.tracks.filter(t => !t.backlog && !t.archived).map(t => trackMarkdown(t, now, offsetMin, board)).join('\n\n')
+}
+
 export function boardMarkdown(board: RoadmapBoard, now: number, offsetMin: number): string {
   return board.tracks.filter(t => !t.archived).map(t => trackMarkdown(t, now, offsetMin, board)).join('\n\n')
 }

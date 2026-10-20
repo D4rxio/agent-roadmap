@@ -37,6 +37,9 @@ versions follow [Semantic Versioning](https://semver.org/).
   per project. This chat's track is no longer pulled to the top: the This chat line shows it.
 - **Priority shows when it matters.** A track shows its priority only once set, in its colour; the `P·`
   placeholder is gone and the priority is set under ⋯. The ⌂ button names where it moves the track.
+- **The header's Copy copies what the tab shows.** `⧉ Copy tracks`, `⧉ Copy backlog`, `⧉ Copy done`
+  (done and abandoned apart) or `⧉ Copy days`, as Markdown; it used to copy every track whatever the tab.
+  Chains keeps its own Copy as Mermaid.
 - **A track's actions moved under ⋯.** Copy, Backlog, ⌂ project and Abandon no longer crowd the title on
   hover: one **⋯** opens them in a row under it, and each action closes the row.
 - **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's
