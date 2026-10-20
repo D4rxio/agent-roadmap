@@ -31,6 +31,12 @@ versions follow [Semantic Versioning](https://semver.org/).
   Done or Abandoned by their steps: nothing to migrate.
 - **Close a track as done yourself.** **⋯ → Done ✓** closes a track as done even with steps left open
   (a triage `done: true`, the person's word only), when the decision was made elsewhere.
+- **Tracks keep one order, grouped by project.** They used to sort by priority, then by the latest
+  change, so the list reshuffled whenever an agent worked. Now they stay as created until you move one
+  (**↑ Up · ↓ Down · ⤒ Top** under ⋯, a person-only triage `rank`), the same in every chat, under a heading
+  per project. This chat's track is no longer pulled to the top: the This chat line shows it.
+- **Priority shows when it matters.** A track shows its priority only once set, in its colour; the `P·`
+  placeholder is gone and the priority is set under ⋯. The ⌂ button names where it moves the track.
 - **A track's actions moved under ⋯.** Copy, Backlog, ⌂ project and Abandon no longer crowd the title on
   hover: one **⋯** opens them in a row under it, and each action closes the row.
 - **Needs you leads with the step.** Each line starts with `track/id`, then the step's title; the track's

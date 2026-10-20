@@ -94,6 +94,8 @@ Any tool may read it, and append to it under the same rules, so other agents and
   accident; it does not prove them, which is why a cross-model pass waits for the person.
 - `archived` (track-level `triage`, the person's only) puts a track away; a later `archived: false` brings it back.
   Put away with every step done, skipped or moved, it is done; otherwise abandoned.
+- `rank` (track-level `triage`, the person's only) places a track in the list: tracks sort by it, lowest
+  first; a track without one ranks by when it was created.
 - `done` (track-level `triage`, the person's only, sent with `archived: true`) closes a track as done whatever
   its steps say; `done: false` takes that back (sent when the person abandons or reopens a track).
 - **Projects.** `session`, `plan` and live files may carry `project`: the folder of the main repository the

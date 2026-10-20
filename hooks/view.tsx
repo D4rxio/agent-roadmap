@@ -1,5 +1,5 @@
 import type { RoadmapBoard, RoadmapPriority, RoadmapReview, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, trackDone, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, rankFor, trackDone, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 import type { ChainGraph, ChainNode } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -68,6 +68,8 @@ export type PaneData = {
   onArchive: (track: string, archived: boolean, done?: boolean) => void
   /** The person closes a track as done, whatever its steps say. */
   onTrackDone?: (track: string) => void
+  /** The person moves a track in the list: its new rank (lowest first). */
+  onTrackRank?: (track: string, rank: number) => void
   /** The item this chat holds, `<track>/<id>`, or ''. */
   focus: string
   onPin: (ref: string) => void
@@ -716,12 +718,46 @@ function searchBox(els: Els, d: PaneData) {
 }
 
 /** The Tracks view: every track, or under a search the tracks and steps it finds. */
+/**
+ * Tracks under their project, in the board's one order (where the person put them). This chat's project
+ * comes first; tracks in no project last. With no project at all there is nothing to group by.
+ */
+function byProject(d: PaneData, tracks: RoadmapTrack[]): { key: string | undefined; name: string; tracks: RoadmapTrack[] }[] {
+  const projects = d.board.projects ?? []
+  const keys = [...new Set(tracks.map(t => t.project))].sort(
+    (a, b) =>
+      Number(a === undefined) - Number(b === undefined) ||
+      Number(b === d.here) - Number(a === d.here) ||
+      projects.findIndex(p => p.key === a) - projects.findIndex(p => p.key === b),
+  )
+  return keys.map(key => ({
+    key,
+    name: key === undefined ? 'No project' : (projects.find(p => p.key === key)?.name ?? key),
+    tracks: tracks.filter(t => t.project === key),
+  }))
+}
+
 function tracksView(els: Els, d: PaneData) {
   const { Box, Text } = els
-  const held = d.focus.split('/')[0]
-  const order = (a: RoadmapTrack, b: RoadmapTrack) => Number(b.name === held) - Number(a.name === held)
   const q = (d.search ?? '').trim()
-  if (!q) return [searchBox(els, d), ...d.board.tracks.filter(t => !t.backlog && !t.archived).sort(order).map(t => trackCard(els, d, t))]
+  if (!q) {
+    const groups = byProject(d, d.board.tracks.filter(t => !t.backlog && !t.archived))
+    const named = groups.some(g => g.key !== undefined)
+    return [
+      searchBox(els, d),
+      ...groups.map(g => (
+        <Box key={`group-${g.key ?? '-'}`} flexDirection="column">
+          {named ? (
+            <Box flexDirection="row" gap={1} marginBottom={1}>
+              <Text bold>{g.name}</Text>
+              <Text dimColor>{`${g.tracks.length} track${g.tracks.length === 1 ? '' : 's'}`}</Text>
+            </Box>
+          ) : null}
+          {g.tracks.map(t => trackCard(els, d, t, undefined, g.tracks))}
+        </Box>
+      )),
+    ]
+  }
   // A search looks everywhere in the project shown, backlog and archive included: finding is the point.
   const found = d.board.tracks
     .map(t => {
@@ -738,14 +774,15 @@ function tracksView(els: Els, d: PaneData) {
         ? `${found.length} track${found.length === 1 ? '' : 's'}${steps ? `, ${steps} step${steps === 1 ? '' : 's'}` : ''} match "${q}"`
         : `Nothing matches "${q}"`}
     </Text>,
-    ...found
-      .sort((a, b) => order(a.t, b.t))
-      .map(x => (x.whole ? trackCard(els, d, x.t) : trackCard(els, d, x.t, new Set(x.hits)))),
+    ...found.map(x => (x.whole ? trackCard(els, d, x.t) : trackCard(els, d, x.t, new Set(x.hits)))),
   ]
 }
 
-/** One track; `only` narrows it to those steps, opened (what a search found). */
-function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
+/**
+ * One track; `only` narrows it to those steps, opened (what a search found). `siblings`, the tracks shown
+ * with it in order, lets the person move it among them.
+ */
+function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>, siblings?: RoadmapTrack[]) {
   const { Box, Text, Button } = els
   const { done, total } = progress(t)
   const pct = total ? Math.round((done / total) * 100) : 0
@@ -767,7 +804,6 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
     // What to pick up, and how long the road still is — in steps, never days.
     t.next ? `▸ next ${t.next.slice(t.name.length + 1)}` : '',
     (t.longest ?? 0) > 1 ? `chain ${t.longest}` : '',
-    !t.project && (d.board.projects ?? []).length > 1 ? 'in no project' : '',
   ].filter(Boolean)
   return (
     <Box key={`track-${t.name}`} flexDirection="column" marginBottom={1}>
@@ -798,7 +834,8 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
         {t.backlog ? (
           Btn(els, d, { key: `trestore-${t.name}`, plain: true, onPress: () => d.onTrackBacklog(t.name, false) }, "Restore", <Text><Text color="suggestion">↺ Restore</Text></Text>)
         ) : null}
-        {Btn(els, d, { key: `tprio-${t.name}`, plain: true, onPress: () => d.onTrackPriority(t.name, nextPriority(t.priority)) }, t.priority ?? "P·", <Text>{t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>P·</Text>}</Text>)}
+        {/* A priority shows only once set, in its colour; it is set under "⋯". */}
+        {t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : null}
         {/* Done is done: every step finished, skipped or moved, whatever was decided on the way, or the
             person said so. An abandoned track says where it stopped. */}
         {finished ? (
@@ -810,7 +847,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>) {
         )}
         <Text dimColor>{`${done}/${total}`}</Text>
       </Box>
-      {menuOpen ? trackMenu(els, d, t, finished) : null}
+      {menuOpen ? trackMenu(els, d, t, finished, siblings) : null}
       {Bar(els, d, `bar-${t.name}`, active)}
       {Row(els, `meta-${t.name}`, <Text dimColor wrap="truncate-end">{momentum(t, d) || t.name}</Text>, chips.join('  '))}
       {isOpen &&
@@ -1094,31 +1131,55 @@ function daysView(els: Els, d: PaneData) {
   )
 }
 
-/** A track's actions, under its title once "⋯" is pressed. Each closes the row, but placing (pressed in turn). */
-function trackMenu(els: Els, d: PaneData, t: RoadmapTrack, finished: boolean) {
+/**
+ * A track's actions, under its title once "⋯" is pressed. What closes or puts the track away closes the row;
+ * moving it, its priority and its project are pressed in turn, so they keep the row open.
+ */
+function trackMenu(els: Els, d: PaneData, t: RoadmapTrack, finished: boolean, siblings?: RoadmapTrack[]) {
   const { Box, Text } = els
   const then = (act: () => void) => () => {
     act()
     d.onStartEdit('')
   }
   const projects = d.board.projects ?? []
-  // Each press moves the track to the next project, then to none, then round again.
+  // Each press moves the track to the next project, then to none, then round again; the label names
+  // where the press takes it.
   const keys: (string | null)[] = [...projects.map(p => p.key), null]
   const next = keys[(keys.indexOf(t.project ?? null) + 1) % keys.length] ?? null
-  const place = `⌂ ${projects.find(p => p.key === t.project)?.name ?? 'no project'}`
+  const place = `⌂ → ${next === null ? 'no project' : (projects.find(p => p.key === next)?.name ?? next)}`
+  const move = (dir: 'up' | 'down' | 'top', label: string) => {
+    const rank = siblings && d.onTrackRank ? rankFor(siblings, t.name, dir) : undefined
+    return rank === undefined
+      ? null
+      : Btn(els, d, { key: `t${dir}-${t.name}`, plain: true, onPress: () => d.onTrackRank?.(t.name, rank) }, label, <Text>{label}</Text>)
+  }
+  const prio = `Priority ${t.priority ?? '·'}`
   return (
-    <Box key={`tmenu-row-${t.name}`} flexDirection="row" gap={2} marginLeft={2}>
+    <Box key={`tmenu-row-${t.name}`} flexDirection="row" flexWrap="wrap" columnGap={2} marginLeft={2}>
       {!t.archived && !finished
         ? Btn(els, d, { key: `tdone-${t.name}`, plain: true, onPress: then(() => d.onTrackDone?.(t.name)) }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
         : null}
       {!t.archived && !t.backlog
         ? Btn(els, d, { key: `tshelve-${t.name}`, plain: true, onPress: then(() => d.onTrackBacklog(t.name, true)) }, 'Backlog', <Text>Backlog</Text>)
         : null}
-      {d.onPlace && projects.length > 0
-        ? Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, place, <Text>{place}</Text>)
-        : null}
       {!t.archived && !finished
         ? Btn(els, d, { key: `tarchive-${t.name}`, plain: true, onPress: then(() => d.onArchive(t.name, true, false)) }, 'Abandon', <Text>Abandon</Text>)
+        : null}
+      {move('up', '↑ Up')}
+      {move('down', '↓ Down')}
+      {move('top', '⤒ Top')}
+      {Btn(
+        els,
+        d,
+        { key: `tprio-${t.name}`, plain: true, onPress: () => d.onTrackPriority(t.name, nextPriority(t.priority)) },
+        prio,
+        <Text>
+          {'Priority '}
+          {t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>·</Text>}
+        </Text>,
+      )}
+      {d.onPlace && projects.length > 0
+        ? Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, place, <Text>{place}</Text>)
         : null}
       {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => { d.onCopyText(t.title, press?.surface ?? 'desktop'); d.onStartEdit('') } }, 'Copy title', <Text>Copy title</Text>)}
     </Box>

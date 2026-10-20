@@ -184,6 +184,7 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
         updatedAt: e.at,
         backlog: false,
         archived: false,
+        rank: old?.createdAt ?? e.at,
         review: trackReview,
         // The plan that creates a track sets its project. A later plan, from wherever, never does — not
         // even for a track laid out before projects existed: that one takes its chats' project instead.
@@ -483,7 +484,9 @@ export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number):
 
   return {
     // Most important first (P0 … unprioritized), then the most recently moved.
-    tracks: [...tracks.values()].sort((a, b) => trackRank(a) - trackRank(b) || b.updatedAt - a.updatedAt),
+    // One order everywhere, the same in every chat: where the person put a track, else when it was made.
+    // Nothing an agent does (work, priority) moves it.
+    tracks: [...tracks.values()].sort((a, b) => a.rank - b.rank || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
     sessions: [...sessions.values()].sort((a, b) => b.lastAt - a.lastAt),
     agents: [...agents.values()].sort((a, b) => b.startedAt - a.startedAt),
     projects: projectsOf([...tracks.values()], [...sessions.values()]),
@@ -700,6 +703,7 @@ function applyTriage(
   const back = new Map<string, Said & { value: boolean }>()
   const archived = new Map<string, boolean>()
   const declared = new Map<string, boolean>()
+  const ranked = new Map<string, number>()
   const placed = new Map<string, string | null>()
   const wins = (old: Said | undefined, next: Said) => !old || (next.person ? true : !old.person)
   for (const e of sorted) {
@@ -717,6 +721,8 @@ function applyTriage(
     if (e.archived !== undefined && person && e.id === undefined) archived.set(e.track, e.archived)
     // And so is declaring a whole track done.
     if (e.done !== undefined && person && e.id === undefined) declared.set(e.track, e.done)
+    // And where a track stands in the list.
+    if (typeof e.rank === 'number' && Number.isFinite(e.rank) && person && e.id === undefined) ranked.set(e.track, e.rank)
     // So is placing a track in a project.
     if (e.project !== undefined && person && e.id === undefined) placed.set(e.track, e.project)
   }
@@ -727,6 +733,7 @@ function applyTriage(
     t.backlog = tb?.value === true
     t.archived = archived.get(t.name) === true
     t.doneByPerson = declared.get(t.name) === true || undefined
+    t.rank = ranked.get(t.name) ?? t.createdAt
     if (placed.has(t.name)) {
       t.project = placed.get(t.name) ?? undefined
       t.projectBy = 'you'
@@ -809,8 +816,18 @@ export function policyText(policy: RoadmapReviewPolicy | undefined): string {
 
 export const PRIORITIES: RoadmapPriority[] = ['P0', 'P1', 'P2', 'P3']
 
-function trackRank(t: RoadmapTrack): number {
-  return t.priority ? PRIORITIES.indexOf(t.priority) : PRIORITIES.length
+/**
+ * The rank that moves `name` one place up or down, or to the top, among `list` (the tracks shown
+ * together, in order); undefined when it cannot move that way.
+ */
+export function rankFor(list: RoadmapTrack[], name: string, move: 'up' | 'down' | 'top'): number | undefined {
+  const i = list.findIndex(t => t.name === name)
+  if (i < 0) return undefined
+  const at = (j: number) => list[j]!.rank
+  const STEP = 60_000
+  if (move === 'top') return i === 0 ? undefined : at(0) - STEP
+  if (move === 'up') return i === 0 ? undefined : i === 1 ? at(0) - STEP : (at(i - 2) + at(i - 1)) / 2
+  return i === list.length - 1 ? undefined : i === list.length - 2 ? at(i + 1) + STEP : (at(i + 1) + at(i + 2)) / 2
 }
 
 /** P0 first, unprioritized last; ties keep the plan's order. */

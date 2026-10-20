@@ -138,6 +138,8 @@ export type RoadmapEvent =
        * The person's word only; it comes with `archived: true`, so the track leaves the list as done.
        */
       done?: boolean
+      /** A whole track's place in the list, set by the person: tracks sort by it, lowest first. */
+      rank?: number
       /** A whole track put in a project (its key), or taken out of any (null). The person's word only. */
       project?: string | null
       origin?: RoadmapOrigin
@@ -242,6 +244,8 @@ export type RoadmapTrack = {
   archived: boolean
   /** The person declared it done, whatever its steps say (see `trackDone`). */
   doneByPerson?: boolean
+  /** Its place in the list: where the person put it, else when it was created. Lowest first. */
+  rank: number
   triagedBy?: string
   /** The step to pick up next: open, not waiting on anything, nobody on it — most urgent, then most unblocking. */
   next?: string

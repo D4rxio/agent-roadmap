@@ -4,7 +4,7 @@ import { checkMove, doneAction, markAction, planAction, reviewAction, statusActi
 import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, matches, whoseReview } from '../hooks/view'
 
-import { FOLLOW_UPS, STALE_MS, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, rankFor, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -484,15 +484,28 @@ test('from the pane: the chip raises priority, ⤓ sets a step aside, the Backlo
   await ui.unmount()
 })
 
-test('a whole track goes to the backlog and back; its priority orders the tracks; the person wins', async () => {
+test('a whole track goes to the backlog and back; tracks keep one order the person sets; the person wins', async () => {
   const other = { ...PLAN, track: 'docs', title: 'Docs', at: 1100 } as RoadmapEvent
   const tri = (at: number, track: string, change: object, origin: 'person' | 'agent') =>
     ({ kind: 'triage', at, session: origin, track, ...change, origin }) as RoadmapEvent
   const names = (events: RoadmapEvent[]) => fold(events, [], 9000).tracks.map(t => t.name)
 
-  // Newest first by default; a priority lifts a track above unprioritized ones.
-  expect(names([PLAN, other])).toEqual(['docs', 'api'])
-  expect(names([PLAN, other, tri(2000, 'api', { priority: 'P1' }, 'person')])).toEqual(['api', 'docs'])
+  // One order, the same everywhere: as created, until the person moves a track. Nothing else moves it —
+  // not a priority, not work done on it, not an agent's rank.
+  expect(names([PLAN, other])).toEqual(['api', 'docs'])
+  expect(names([PLAN, other, tri(2000, 'docs', { priority: 'P0' }, 'person')])).toEqual(['api', 'docs'])
+  const worked = { kind: 'step', at: 5000, session: 's', track: 'docs', id: '1.1', status: 'running', origin: 'agent' } as RoadmapEvent
+  expect(names([PLAN, other, worked])).toEqual(['api', 'docs'])
+  expect(names([PLAN, other, tri(2000, 'docs', { rank: 1 }, 'agent')])).toEqual(['api', 'docs'])
+  const top = rankFor(fold([PLAN, other], [], 9000).tracks, 'docs', 'top')!
+  expect(names([PLAN, other, tri(2000, 'docs', { rank: top }, 'person')])).toEqual(['docs', 'api'])
+  // Up and down step one place among the tracks shown together; the ends cannot go further.
+  const three = [PLAN, other, { ...PLAN, track: 'web', title: 'Web', at: 1200 } as RoadmapEvent]
+  const list = fold(three, [], 9000).tracks
+  expect(rankFor(list, 'api', 'up')).toBe(undefined)
+  expect(rankFor(list, 'web', 'down')).toBe(undefined)
+  expect(names([...three, tri(2000, 'web', { rank: rankFor(list, 'web', 'up')! }, 'person')])).toEqual(['api', 'web', 'docs'])
+  expect(names([...three, tri(2000, 'api', { rank: rankFor(list, 'api', 'down')! }, 'person')])).toEqual(['docs', 'api', 'web'])
 
   // The whole track set aside: out of the next-work summary, listed apart; restore brings it back.
   const shelved = fold([PLAN, other, tri(2000, 'api', { backlog: true }, 'person')], [], 9000)
@@ -534,11 +547,12 @@ test('from the pane: a track goes to the backlog tab and is restored from there'
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
+    // The track's actions wait under "⋯", so they never crowd its title; no priority shows until one is set.
+    expect(await ui.find({ key: 'tshelve-api' })).toBe(undefined)
+    expect(await ui.find({ text: /^P3$/ })).toBe(undefined)
+    await ui.press({ key: 'tmenu-api' })
     await ui.press({ key: 'tprio-api' })
     expect(await ui.find({ text: /^P3$/ })).toBeDefined()
-    // The track's actions wait under "⋯", so they never crowd its title.
-    expect(await ui.find({ key: 'tshelve-api' })).toBe(undefined)
-    await ui.press({ key: 'tmenu-api' })
     await ui.press({ key: 'tshelve-api' })
     expect(await ui.find({ text: /API v2/ })).toBe(undefined)
     await ui.press({ key: 'view-backlog' })
@@ -547,10 +561,12 @@ test('from the pane: a track goes to the backlog tab and is restored from there'
     expect(await ui.find({ text: /backlog is empty/ })).toBeDefined()
     await ui.press({ key: 'view-tracks' })
     expect(await ui.find({ text: /API v2/ })).toBeDefined()
+    await ui.press({ key: 'tmenu-api' })
     await ui.press({ key: 'tprio-api' })
     await ui.press({ key: 'tprio-api' })
     await ui.press({ key: 'tprio-api' })
     await ui.press({ key: 'tprio-api' })
+    await ui.press({ key: 'tmenu-api' })
     await ui.unmount()
   }
 })
@@ -1291,6 +1307,15 @@ test('from the pane: close a finished track, abandon an unfinished one, find the
     if (surface === 'desktop') {
       await ui.press({ key: 'stale-todo-web-1' })
       expect(await ui.find({ text: /stale/ })).toBe(undefined)
+      // Moving a track: the first one cannot go up; the second goes to the top, by the person's word, and
+      // the row stays open for the next press.
+      await ui.press({ key: 'tmenu-api' })
+      expect(await ui.find({ key: 'tup-api' })).toBe(undefined)
+      await ui.press({ key: 'tmenu-web' })
+      await ui.press({ key: 'ttop-web' })
+      expect([...files.values()].some(t => t.includes('"track":"web"') && t.includes('"rank":') && t.includes('"origin":"person"'))).toBe(true)
+      expect(await ui.find({ key: 'tdown-web' })).toBeDefined()
+      expect(await ui.find({ key: 'tup-web' })).toBe(undefined)
     }
     await ui.unmount()
   }
@@ -1899,7 +1924,9 @@ test('the pane shows this chat\'s project, switches to another or All, and place
   expect(await ui.find({ text: /WEB/ })).toBeDefined()
   expect(await ui.find({ text: /DOCS/ })).toBeDefined()
   expect(await ui.find({ text: /API/ })).toBe(undefined)
-  expect(await ui.find({ text: /in no project/ })).toBeDefined()
+  // Grouped under their project: this chat's first, tracks in no project last.
+  expect(await ui.find({ text: /^No project$/ })).toBeDefined()
+  expect(await ui.find({ text: /^web$/ })).toBeDefined()
   // Another project, then All.
   await ui.press({ key: 'proj-0' })
   expect(await ui.find({ text: /API/ })).toBeDefined()

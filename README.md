@@ -107,8 +107,11 @@ or let it read and update one as it works. The pane opens on its own in the desk
   one as done yourself, open steps and all. **Backlog** is what will be done later (**↺ Restore** brings it
   back). **Abandon** drops an unfinished track; it shows where it stopped (`closed at 40%`) under
   Abandoned in the Done tab. **↺ Reopen** and **↺ Resume** bring a track back.
-- **A track's actions** wait under **⋯** (shown on hover): Done ✓, Backlog, ⌂ project, Abandon, Copy
-  title — so they never crowd the title out.
+- **A track's actions** wait under **⋯** (shown on hover): Done ✓, Backlog, Abandon, **↑ Up · ↓ Down ·
+  ⤒ Top**, Priority, ⌂ → another project, Copy title — so they never crowd the title out.
+- **One order, like a kanban board.** Tracks are grouped under their project (this chat's first, tracks
+  in no project last) and stay where you put them, the same in every chat: nothing an agent does moves
+  them. A priority shows on the track only once set, in its colour (P0 red, P1 orange, P2 blue, P3 grey).
 - **Projects.** Tracks belong to the repository they were laid out from (worktrees count as one). The
   pane shows this chat's project — plus tracks in no project — with a row to switch to another or **All**;
   hover a track header for **⌂** to move it to another project. Chats working in other projects stay out

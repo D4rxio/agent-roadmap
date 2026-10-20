@@ -533,6 +533,7 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
     onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
     onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
     onTrackBacklog: (track, backlog) => void personTrackTriage($, track, { backlog }),
+    onTrackRank: (track: string, rank: number) => void personTrackTriage($, track, { rank }),
     onArchive: (track, archived, done) => void personArchive($, track, archived, done),
     onTrackDone: (track: string) => void personArchive($, track, true, true),
     onWide: () => void openChains($),
@@ -607,7 +608,7 @@ async function personTriage($: EngineInterface, track: string, id: string, chang
   if (change.backlog !== undefined) $.ui.toast(change.backlog ? `→ ${track}/${id} moved to backlog` : `↺ ${track}/${id} restored`)
 }
 
-async function personTrackTriage($: EngineInterface, track: string, change: { priority?: RoadmapPriority | null; backlog?: boolean }) {
+async function personTrackTriage($: EngineInterface, track: string, change: { priority?: RoadmapPriority | null; backlog?: boolean; rank?: number }) {
   await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track, ...change, origin: 'person' })
   if (change.backlog !== undefined) $.ui.toast(change.backlog ? `${track} moved to backlog` : `↺ ${track} restored`)
 }
