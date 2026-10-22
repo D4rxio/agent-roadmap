@@ -382,11 +382,6 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
   const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
   if (!ref || !step) return unknownStep(ctx, input.step)
-  if (step.reportedAt === undefined) {
-    return refused(
-      `${ref.track}/${ref.id} has no work reported done to review: a review reviews the work a worker last reported done, so record it after that done.`,
-    )
-  }
   if (ctx.channel === 'cli' && family(ctx.actor) === 'claude') {
     return refused('Claude records reviews with its own roadmap review tool, where the host vouches for who it is — not through the CLI.')
   }
@@ -405,6 +400,17 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   const verdict = input.verdict
   if (verdict !== 'pass' && verdict !== 'findings' && verdict !== 'fail') {
     return refused('verdict is pass, findings (passed with findings to follow up) or fail.')
+  }
+  // A review reviews the work last reported done. A fail of work not (yet) reported done is still worth
+  // keeping — a round in its history, which closes nothing — but a pass of it could never count, so it is
+  // refused rather than recorded as a trap: report the work done first, then review that.
+  const unreported = step.reportedAt === undefined || ctx.now <= step.reportedAt
+  if (unreported && verdict !== 'fail') {
+    return refused(
+      step.reportedAt === undefined
+        ? `${ref.track}/${ref.id} has no work reported done, so a ${verdict} cannot count: report it done first (roadmap done), then review that. A fail is recorded at any time, as a round of its history.`
+        : `This ${verdict} is from before ${ref.track}/${ref.id} was last reported done, so it reviewed earlier work and cannot count for this one: review the work as reported now. A fail is recorded at any time, as a round of its history.`,
+    )
   }
   const ev: RoadmapEvent = {
     kind: 'review',
@@ -441,7 +447,9 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
         : s?.status
   return {
     ok: true,
-    text: `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.${ups}`,
+    text: unreported
+      ? `Review of ${ref2} recorded as a round of its history: fail, on work not reported done${step.reportedAt === undefined ? '' : ' since'}. It closes and reopens nothing; the step is ${state}.${ups}`
+      : `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.${ups}`,
     emit,
     track: ref.track,
     toast: counts ? `⚖ ${ref2} reviewed: ${verdict}` : undefined,
@@ -539,9 +547,6 @@ export function codexReviewAction(
   const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
   if (!ref || !step) return unknownStep(ctx, input.step)
   const r2 = `${ref.track}/${ref.id}`
-  if (step.reportedAt !== undefined && at <= step.reportedAt) {
-    return refused(`Codex session ${id} finished before ${r2} was last reported done: it reviewed earlier work, so it cannot count for this one.`)
-  }
   if (ctx.events.some(e => e.kind === 'review' && e.track === ref.track && e.id === ref.id && e.session === id && e.at === at)) {
     return refused(`Codex session ${id} is already recorded on ${r2}.`)
   }

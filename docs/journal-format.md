@@ -90,7 +90,9 @@ Any tool may read it, and append to it under the same rules, so other agents and
   the nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the process
   tree cannot be read, `$CODEX_SANDBOX`), `codex-session` (carried over by the host with `--from-codex` from
   Codex's own session log, for a Codex run that could not write; `session` is Codex's session id and `at` is
-  when it finished) or `declared` (`--actor`, nothing behind it). A `declared` review
+  when it finished) or `declared` (`--actor`, nothing behind it). A `fail` may be written at any time — a
+  round of the step's history that changes nothing — while a `pass` or `findings` is written only after the
+  work it reviews was reported done. A `declared` review
   never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
   review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
   accident; it does not prove them, which is why a cross-model pass waits for the person.

@@ -2839,7 +2839,24 @@ test('a Codex review carried over from its own session log: dated when Codex fin
   expect((codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...low, verdict: 'REVISE' }) }).emit[0] as any).verdict).toBe('fail')
   expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...ok, verdict: 'BLOCKED', limitations: ['no access'] }) }).ok).toBe(false)
   // It cannot count for work reported done after Codex finished.
+  // A pass from before the work was last reported done cannot count: refused. A fail from then is history:
+  // recorded as a round, changing nothing (claudex-loop's REVISE rounds come before any done).
   expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { at: '2026-10-22T10:30:00Z' }) }).text).toContain('reviewed earlier work')
+  const early = codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...low, verdict: 'REVISE' }, { at: '2026-10-22T10:30:00Z' }) })
+  expect(early.ok).toBe(true)
+  expect(early.text).toContain('round of its history')
+  const after = fold([...events, ...early.emit], [], ctx.now).tracks[0]!.steps[0]!
+  expect(after.reviewState).toBe('missing')
+  expect(after.status).toBe('awaiting')
+  expect(after.reviewRounds?.map(r => r.verdict)).toEqual(['fail'])
+  // The same for a review written directly on work still running: a fail is a round, a pass waits for done.
+  const running = events.slice(0, 2)
+  const direct = { events: running, lives: [], now: Date.parse('2026-10-22T12:00:00Z'), session: 'x9', actor: 'codex', via: 'codex-sandbox', channel: 'cli' as const }
+  const fail = reviewAction(direct, { step: 'api/1', verdict: 'fail', evidence: 'two holes' })
+  expect(fail.ok).toBe(true)
+  expect(fold([...running, ...fail.emit], [], direct.now).tracks[0]!.steps[0]!.status).toBe('running')
+  expect(reviewAction(direct, { step: 'api/1', verdict: 'pass' }).text).toContain('report it done first')
+  expect(brief(fold([...running, ...fail.emit], [], direct.now), 'api', '1')).toContain('round 1, review by codex: fail (of work not reported done) — two holes')
   // Not another model, not finished, not a review result: refused.
   expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { model: 'claude-opus-5-5' }) }).ok).toBe(false)
   expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { finished: false }) }).ok).toBe(false)

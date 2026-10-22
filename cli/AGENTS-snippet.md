@@ -32,6 +32,8 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   person has accepted the review (record one more round with the same verdict and the follow-ups).
   In a read-only sandbox (claudex-loop runs reviews that way) the CLI cannot write: end with your review
   result as asked, and the host carries it over from your own session log (`$R review … --from-codex`).
+  A `fail` is recorded at any time, as a round of the step's history; a `pass` or `findings` only for work
+  reported done before it — so the work is reported done before the round meant to close it.
   A step with a cross-model policy needs a review by a different model family for the work last reported
   done (a new done needs a new review); its pass then waits for the person to confirm. The CLI records you as
   `codex` from inside Codex whatever `--actor` says; a bare `--actor` never counts as cross-model.

@@ -1265,7 +1265,7 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
     ...(s.reviewRounds ?? s.reviews).map(
       (r, i) =>
         `  round ${i + 1}, review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${
-          s.reportedAt === undefined || r.at <= s.reportedAt ? ' (of earlier work)' : ''
+          s.reportedAt === undefined ? ' (of work not reported done)' : r.at <= s.reportedAt ? ' (of earlier work)' : ''
         }${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`,
     ),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',

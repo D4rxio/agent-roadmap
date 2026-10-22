@@ -832,7 +832,8 @@ export const register: Register = on => {
         'another model) review and record it. Record every round, a fail included, not only the last one. Findings to follow up go in `follow_ups`. ' +
         'A Codex review that ran read-only and could not write the roadmap (claudex-loop reviews that way) is not yours to record here: ' +
         'carry it over after each round with `node ~/.claude/mods/roadmap/cli/roadmap.mjs review <track>/<id> --from-codex <the round\'s result.json>`, ' +
-        'which reads the verdict from Codex\'s own session log and records it as Codex.',
+        'which reads the verdict from Codex\'s own session log and records it as Codex. A fail is recorded at any time, as a round of the ' +
+        'step\'s history; a pass only counts for work reported done before it, so report the work done before the round meant to close it.',
       inputSchema: {
         type: 'object',
         properties: {
