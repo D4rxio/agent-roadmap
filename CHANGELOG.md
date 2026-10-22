@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Carry over a Codex review that could not write.** `roadmap review <step> --from-codex <result.json |
+  session id>` records a review Codex made in a read-only sandbox (claudex-loop reviews that way): the
+  verdict comes from Codex's own session log, dated when Codex finished, recorded once as Codex
+  (`via: "codex-session"`, with the session id to audit). `--follow-ups` files a passed review's findings.
 - **A diagnostics log per chat** (`<journal>/diag/<session>.log`, the last 300 lines): module loads,
   render failures and timeouts, slow renders, and renders per minute. The engine reports a failed pane
   only to its debug log, which the desktop app keeps off; this makes a blank pane traceable. Logs of

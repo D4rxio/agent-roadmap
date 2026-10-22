@@ -18,6 +18,10 @@
 //                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
 //   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …] [--follow-up "title[:P1]"]…
+//   roadmap review <ref> --from-codex <session id | result.json | rollout.jsonl> [--follow-ups]
+//                                       carry over a Codex review that could not write the roadmap itself
+//                                       (claudex-loop's read-only sandbox): the verdict comes from Codex's own
+//                                       session log; --follow-ups files a passed review's findings as follow-ups
 //   roadmap review <ref> --start        say you are reviewing it (writes nothing; never mark a step running to review it)
 //                                       record a review of a step's work, as this actor (e.g. Codex reviewing Claude's)
 //
@@ -29,7 +33,7 @@
 // never counts as a cross-model review. Claude records its reviews with its own tool, not here.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -222,6 +226,39 @@ function act(run, activity) {
   process.stdout.write(r.text + '\n')
 }
 
+/**
+ * Codex's own log of a session, by its id, by a claudex-loop `result.json` (which names the id), or by the
+ * log's path. The log is read from Codex's folder ($CODEX_HOME, else ~/.codex), where Codex's harness wrote it.
+ */
+function codexRollout(ref) {
+  let id = ref
+  const home = process.env.CODEX_HOME || join(homedir(), '.codex')
+  if (ref.endsWith('.jsonl')) {
+    // Only a log in Codex's own folder: that is where its harness writes them.
+    const path = resolve(ref)
+    if (!path.startsWith(resolve(home) + sep) || !existsSync(path)) fail(`not a Codex session log under ${home}: ${ref}`)
+    return readFileSync(path, 'utf8')
+  }
+  if (ref.endsWith('.json')) {
+    if (!existsSync(ref)) fail(`no such file: ${ref}`)
+    id = parse(readFileSync(ref, 'utf8'))?.session_id
+    if (typeof id !== 'string' || !id) fail(`${ref} names no Codex session (session_id)`)
+  }
+  if (!/^[0-9a-f-]{8,}$/i.test(id)) fail(`not a Codex session id: ${id}`)
+  const found = []
+  const walk = (dir, depth) => {
+    if (depth > 4 || !existsSync(dir)) return
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      if (d.isDirectory()) walk(join(dir, d.name), depth + 1)
+      else if (d.name.startsWith('rollout-') && d.name.endsWith(`-${id}.jsonl`)) found.push(join(dir, d.name))
+    }
+  }
+  walk(join(home, 'sessions'), 0)
+  walk(join(home, 'archived_sessions'), 0)
+  if (!found.length) fail(`no Codex session log for ${id} under ${home}`)
+  return readFileSync(found[0], 'utf8')
+}
+
 /** `--follow-up "title[:P1]"`, repeatable: follow-ups set aside in the backlog. */
 function followUps(flags) {
   return [].concat(flags['follow-up'] ?? []).map(raw => {
@@ -306,6 +343,11 @@ switch (command) {
     )
     break
   case 'review':
+    if (flags['from-codex'] !== undefined) {
+      const rollout = codexRollout(String(flags['from-codex']))
+      act(ctx => actions.codexReviewAction(ctx, { step: args[0], rollout, followUps: yes(flags['follow-ups']) }), `roadmap review ${args[0] ?? ''} --from-codex`)
+      break
+    }
     act(
       ctx =>
         actions.reviewAction(ctx, {

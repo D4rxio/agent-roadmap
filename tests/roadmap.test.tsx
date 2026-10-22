@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
+import { checkMove, codexReviewAction, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, matches, whoseReview } from '../hooks/view'
 
@@ -2799,6 +2799,52 @@ test('a reviewer files its findings as follow-ups, also after the person accepte
   expect(f?.priority).toBe('P2')
   expect(board.tracks[0]!.phases.find(p => p.stepIds.includes(f!.id))?.name).toBe(FOLLOW_UPS)
   expect(steps.length).toBe(2)
+})
+
+test('a Codex review carried over from its own session log: dated when Codex finished, refused when it cannot count', async () => {
+  const cross = { required: true, independence: 'cross-model' }
+  const events = [
+    { kind: 'plan', at: 1, session: 's', track: 'api', review: cross, phases: [{ name: 'P', steps: [{ id: '1', title: 'A' }] }] },
+    { kind: 'step', at: Date.parse('2026-10-22T10:00:00Z'), session: 'c1', track: 'api', id: '1', status: 'running', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: Date.parse('2026-10-22T11:00:00Z'), session: 'c1', track: 'api', id: '1', status: 'done', actor: 'claude', origin: 'agent' },
+  ] as RoadmapEvent[]
+  const rollout = (result: unknown, opts: { model?: string; at?: string; finished?: boolean } = {}) =>
+    [
+      { timestamp: '2026-10-22T11:30:00Z', type: 'session_meta', payload: { id: '01a1-codex-session' } },
+      { timestamp: '2026-10-22T11:30:01Z', type: 'turn_context', payload: { model: opts.model ?? 'gpt-6.1' } },
+      ...(opts.finished === false
+        ? []
+        : [{ timestamp: opts.at ?? '2026-10-22T11:45:00Z', type: 'event_msg', payload: { type: 'task_complete', last_agent_message: typeof result === 'string' ? result : JSON.stringify(result) } }]),
+    ]
+      .map(x => JSON.stringify(x))
+      .join('\n')
+  const ok = { verdict: 'APPROVED', summary: 'Sound.', findings: [], coverage: ['src/a.ts'], limitations: [] }
+  const low = { ...ok, findings: [{ id: 'F1', severity: 'low', path: 'src/a.ts', evidence: 'naming', fix: 'Rename the helper' }] }
+  // Run by Claude through the CLI, yet recorded as Codex: the verdict comes from Codex's own log.
+  const ctx = { events, lives: [], now: Date.parse('2026-10-22T12:00:00Z'), session: 'claude-x', actor: 'claude', via: 'process', channel: 'cli' as const }
+  const r = codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok) })
+  expect(r.ok).toBe(true)
+  const ev = r.emit[0] as any
+  expect(ev).toMatchObject({ kind: 'review', actor: 'codex', via: 'codex-session', session: '01a1-codex-session', verdict: 'pass', at: Date.parse('2026-10-22T11:45:00Z') })
+  expect(ev.evidence).toContain('inspected: src/a.ts')
+  // A cross-model pass waits for the person, as any.
+  expect(fold([...events, ...r.emit], [], ctx.now).tracks[0]!.steps[0]!.reviewState).toBe('reviewed')
+  // Recorded once.
+  expect(codexReviewAction({ ...ctx, events: [...events, ...r.emit] }, { step: 'api/1', rollout: rollout(ok) }).text).toContain('already recorded')
+  // Low findings: passed with findings, and with --follow-ups they become follow-ups.
+  const f = codexReviewAction(ctx, { step: 'api/1', rollout: rollout(low), followUps: true })
+  expect((f.emit[0] as any).verdict).toBe('findings')
+  expect(f.emit.some(e => e.kind === 'add' && (e as any).title === 'F1: Rename the helper')).toBe(true)
+  // REVISE fails; BLOCKED records nothing.
+  expect((codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...low, verdict: 'REVISE' }) }).emit[0] as any).verdict).toBe('fail')
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...ok, verdict: 'BLOCKED', limitations: ['no access'] }) }).ok).toBe(false)
+  // It cannot count for work reported done after Codex finished.
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { at: '2026-10-22T10:30:00Z' }) }).text).toContain('reviewed earlier work')
+  // Not another model, not finished, not a review result: refused.
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { model: 'claude-opus-5-5' }) }).ok).toBe(false)
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { finished: false }) }).ok).toBe(false)
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout('Looks good to me.') }).text).toContain('record that review by hand')
+  expect(codexReviewAction(ctx, { step: 'api/1', rollout: 'not a log' }).ok).toBe(false)
 })
 
 test('every review round stays visible: a fail, the fixes, the next pass', async ($, on) => {

@@ -462,7 +462,10 @@ export function stepAction(ctx: ActionContext, input: Record<string, unknown>): 
       lines.push(
         `Codex is installed here: when the work is ready, have Codex review it (e.g. the codex-review skill of claudex-loop, ` +
           `or \`codex exec\`), and have Codex itself record the verdict with: ` +
-          `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --verdict pass|findings|fail --evidence "…"`,
+          `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --verdict pass|findings|fail --evidence "…". ` +
+          `If Codex ran read-only and could not write it (claudex-loop reviews that way), carry its verdict over yourself after each round: ` +
+          `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --from-codex <the round's result.json> ` +
+          `(the verdict is read from Codex's own session log; add --follow-ups to file a passed review's findings).`,
       )
     }
   }
@@ -483,4 +486,81 @@ export function statusAction(ctx: ActionContext, input: Record<string, unknown> 
         .join('\n')}`
     : ''
   return { ok: true, text: summary(board, { open: 50, project: all ? '*' : ctx.project }) + others, emit: [] }
+}
+
+/**
+ * A Codex review carried over from Codex's own session log (`~/.codex/sessions/…/rollout-…-<id>.jsonl`),
+ * for a Codex run that could not write the roadmap itself (a read-only sandbox, as claudex-loop runs it).
+ * The verdict is read from what the Codex harness recorded — its final message, which must be a
+ * claudex-loop review result — never from the relaying agent's words. It is dated when Codex finished,
+ * so it counts only for work reported done before that; recorded as Codex, `via: "codex-session"`, with
+ * the session id to audit it by. Like any cross-model pass, the person confirms it.
+ */
+export function codexReviewAction(
+  ctx: ActionContext,
+  input: { step?: unknown; rollout: string; followUps?: boolean },
+): ActionResult {
+  const lines = input.rollout
+    .split('\n')
+    .map(l => {
+      try {
+        return l.trim() ? (JSON.parse(l) as { type?: string; timestamp?: string; payload?: Record<string, unknown> }) : undefined
+      } catch {
+        return undefined
+      }
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x)
+  const meta = lines.find(e => e.type === 'session_meta')?.payload
+  const id = text(meta?.id) ?? text(meta?.session_id)
+  if (!id) return refused('That is not a Codex session log: it has no session_meta.')
+  const models = [...new Set(lines.filter(e => e.type === 'turn_context').map(e => text(e.payload?.model)).filter((m): m is string => !!m))]
+  if (models.some(m => family(m) === 'claude')) return refused(`Codex session ${id} ran a Claude model (${models.join(', ')}): not another model's review.`)
+  const done = [...lines].reverse().find(e => e.type === 'event_msg' && e.payload?.type === 'task_complete')
+  const last = text(done?.payload?.last_agent_message)
+  const at = Date.parse(done?.timestamp ?? '')
+  if (!done || !last || !Number.isFinite(at)) return refused(`Codex session ${id} did not finish with an answer: nothing to record.`)
+  let result: { verdict?: unknown; summary?: unknown; findings?: unknown; coverage?: unknown; limitations?: unknown } | undefined
+  try {
+    result = JSON.parse(last.replace(/^```(?:json)?\s*|\s*```$/g, ''))
+  } catch {
+    result = undefined
+  }
+  if (!result || !['APPROVED', 'REVISE', 'BLOCKED'].includes(String(result.verdict))) {
+    return refused(`Codex session ${id} did not end with a claudex-loop review result (verdict APPROVED, REVISE or BLOCKED): record that review by hand.`)
+  }
+  if (result.verdict === 'BLOCKED') {
+    const why = Array.isArray(result.limitations) ? result.limitations.join('; ') : ''
+    return refused(`Codex could not review it (BLOCKED${why ? `: ${why}` : ''}): no verdict to record.`)
+  }
+  const findings = (Array.isArray(result.findings) ? result.findings : []) as { id?: string; severity?: string; path?: string; evidence?: string; fix?: string }[]
+  const verdict = result.verdict === 'REVISE' ? 'fail' : findings.length ? 'findings' : 'pass'
+  const now = fold(ctx.events, [], ctx.now)
+  const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
+  const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+  if (!ref || !step) return unknownStep(ctx, input.step)
+  const r2 = `${ref.track}/${ref.id}`
+  if (step.reportedAt !== undefined && at <= step.reportedAt) {
+    return refused(`Codex session ${id} finished before ${r2} was last reported done: it reviewed earlier work, so it cannot count for this one.`)
+  }
+  if (ctx.events.some(e => e.kind === 'review' && e.track === ref.track && e.id === ref.id && e.session === id && e.at === at)) {
+    return refused(`Codex session ${id} is already recorded on ${r2}.`)
+  }
+  const coverage = Array.isArray(result.coverage) ? result.coverage.filter((x): x is string => typeof x === 'string') : []
+  const evidence = [
+    text(result.summary),
+    findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'}: ${findings.map(f => `${f.id ?? '?'} ${f.severity ?? ''}`.trim()).join(', ')}` : '',
+    coverage.length ? `inspected: ${coverage.join('; ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' — ')
+  // What a passed review still asks for can become follow-ups; what a failed one asks for is the fix itself.
+  const follow =
+    input.followUps && verdict === 'findings'
+      ? findings.map(f => ({ title: `${f.id ? `${f.id}: ` : ''}${(f.fix ?? f.evidence ?? '').slice(0, 160)}`, priority: f.severity === 'high' ? 'P1' : f.severity === 'medium' ? 'P2' : 'P3' }))
+      : []
+  const res = reviewAction(
+    { ...ctx, actor: 'codex', via: 'codex-session', session: id, now: at, channel: 'cli' },
+    { step: r2, verdict, evidence, note: `from Codex session ${id}${models.length ? ` (${models.join(', ')})` : ''}`, follow_ups: follow },
+  )
+  return res.ok ? { ...res, text: `${res.text}\nCarried over from Codex session ${id}, finished ${new Date(at).toISOString()}.` } : res
 }

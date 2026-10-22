@@ -143,6 +143,19 @@ done waits for a qualifying review, and each new done needs a new one. A plan ca
 never lower it. Because no process on one machine can prove which model wrote a review, a cross-model
 pass comes to **Needs you** with the reviewer and the evidence, and your **Confirm ✓** closes it.
 
+**A Codex review that cannot write.** When Codex reviews in a read-only sandbox — as
+[claudex-loop](https://github.com/chaseai-yt/claudex-loop) runs it — it cannot write the roadmap. The host
+carries the verdict over after each round:
+
+```bash
+node ~/.claude/mods/roadmap/cli/roadmap.mjs review <track>/<id> --from-codex <result.json | session id> [--follow-ups]
+```
+
+The verdict is read from Codex's own session log (`~/.codex/sessions`), not from the host's words:
+APPROVED is a pass (with findings if any were noted), REVISE a fail, BLOCKED records nothing. It is dated
+when Codex finished, so it never counts for work reported done after it, and it is recorded once.
+`--follow-ups` files a passed review's findings as follow-ups.
+
 ### Tools the model gets
 
 | Tool | Purpose |

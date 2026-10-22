@@ -88,7 +88,9 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - A review is written by the reviewer itself, under its own `session` and `actor`, with `via` saying how
   the actor was established: `claude-code` (the mod's own tool, run by the host), `process` (the CLI found
   the nearest Codex or Claude process above it), `codex-sandbox` (inside Codex's sandbox, where the process
-  tree cannot be read, `$CODEX_SANDBOX`) or `declared` (`--actor`, nothing behind it). A `declared` review
+  tree cannot be read, `$CODEX_SANDBOX`), `codex-session` (carried over by the host with `--from-codex` from
+  Codex's own session log, for a Codex run that could not write; `session` is Codex's session id and `at` is
+  when it finished) or `declared` (`--actor`, nothing behind it). A `declared` review
   never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
   review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
   accident; it does not prove them, which is why a cross-model pass waits for the person.
