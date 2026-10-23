@@ -583,6 +583,18 @@ function header(els: Els, d: PaneData) {
   )
 }
 
+/** Copies a step as "#track/id title", ready to paste into a prompt: the same as a step row's Copy. */
+function copyStep(els: Els, d: PaneData, st: { track: string; id: string; title: string }) {
+  const { Text } = els
+  return Btn(
+    els,
+    d,
+    { key: `ncopy-${st.track}-${st.id}`, plain: true, onPress: (press: any) => d.onCopyText(`#${st.track}/${st.id} ${st.title}`, press?.surface ?? 'desktop') },
+    'Copy',
+    <Text><Text dimColor>Copy</Text></Text>,
+  )
+}
+
 function needsYou(els: Els, d: PaneData) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
@@ -610,6 +622,7 @@ function needsYou(els: Els, d: PaneData) {
             <Button key={`unmove-${st.track}-${st.id}`} onPress={() => d.onCycle(st.track, st.id, 'todo')}>
               Undo move
             </Button>
+            {copyStep(els, d, st)}
           </Box>
         </Box>
       ))}
@@ -629,6 +642,7 @@ function needsYou(els: Els, d: PaneData) {
             <Button key={`stale-done-${st.track}-${st.id}`} onPress={() => d.onCycle(st.track, st.id, 'done')}>
               Done ✓
             </Button>
+            {copyStep(els, d, st)}
           </Box>
         </Box>
       ))}
@@ -683,6 +697,7 @@ function needsYou(els: Els, d: PaneData) {
             >
               Reject
             </Button>
+            {copyStep(els, d, st)}
           </Box>
         </Box>
       ))}

@@ -31,6 +31,8 @@ versions follow [Semantic Versioning](https://semver.org/).
   worker's `done` does — also after the person has accepted the review.
 
 ### Changed
+- **Copy beside each item in Needs you.** `#track/id title` goes on the clipboard, to ask about the item
+  in a prompt without typing it out.
 - **Done, Backlog and Abandoned are three things.** A track whose every step is done, skipped or moved
   says **✓ Done** (done is done, whatever was decided on the way) and offers **Close**. Backlog is what will
   be done later. **Abandon** (it was "Archive") drops an unfinished track, which then says where it stopped

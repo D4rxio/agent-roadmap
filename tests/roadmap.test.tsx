@@ -2750,6 +2750,11 @@ test('the pane shows a review owed and offers the person to confirm without it',
   }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  const copied: string[] = []
+  on('ui.copy', (_$, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true } }
+  })
   on('session.id', () => ({ value: 'session-eighteen' }))
   on('store.get', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
@@ -2764,6 +2769,9 @@ test('the pane shows a review owed and offers the person to confirm without it',
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ text: /waits for Codex's review — a model other than claude must review it/ })).toBeDefined()
     expect(await ui.find({ text: /Confirm without Codex's review/ })).toBeDefined()
+    // Copy beside the decision puts the step on the clipboard, to ask about it in a prompt.
+    await ui.press({ key: 'ncopy-api-1' })
+    expect(copied.at(-1)).toBe('#api/1 Fence')
     await ui.press({ key: 'fold-api' })
     expect(await ui.find({ text: /review owed/ })).toBeDefined()
     await ui.press({ key: 'fold-api' })
