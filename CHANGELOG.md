@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-23
+
 ### Added
 - **Carry over a Codex review that could not write.** `roadmap review <step> --from-codex <result.json |
   session id>` records a review Codex made in a read-only sandbox (claudex-loop reviews that way): the
@@ -225,6 +227,7 @@ a daily timeline, priorities and a backlog for steps and whole tracks, the perso
 person-confirmed checkpoints, subagents ticking off their steps, Copy as Markdown, and an append-only
 event journal so parallel sessions never lose each other's updates.
 
+[0.6.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.6.0
 [0.5.2]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.2
 [0.5.1]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.1
 [0.5.0]: https://github.com/D4rxio/agent-roadmap/releases/tag/v0.5.0

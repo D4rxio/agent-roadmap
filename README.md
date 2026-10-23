@@ -14,21 +14,21 @@ what happened across five chats, and a fresh session knows where things stand.
 <p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, a step moved to another track, a cross-model review waiting for confirmation, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
 
+## What's new in 0.6.0
+
+- **Done, Backlog, Abandoned** — a track whose steps are all done says ✓ Done and goes to its own **Done**
+  tab; abandoned tracks say where they stopped; you can close a track as done yourself.
+- **A calmer list** — tracks keep one order you set (↑ ↓ ⤒), grouped by project; their actions wait under
+  **⋯**; a priority shows only once set, in its colour.
+- **Search** above the tracks — words in any order, accents ignored, refs included.
+- **Reviews** — every round stays visible; a reviewer files findings as follow-ups; a Codex review run
+  read-only (claudex-loop) is carried over from Codex's own session log with `--from-codex`.
+- **Copy what you see** — the header's Copy follows the tab, and each item in Needs you has its own Copy.
+
 ## What's new in 0.5.1
 
 - **Chains, easier to read** — ⤢ Wide opens the diagram in a pane of its own; this chat's step is ringed
   and named; hover a box for its whole title; Show done brings back folded steps.
-- **A clearer pane** — what you look at stands out, its actions step back; Needs you says whose review
-  a step waits for.
-- **[Architecture notes](docs/architecture.md)** — how the modules fit together.
-
-## What's new in 0.5.0
-
-- **Projects** — tracks belong to the repository they were laid out from; each chat sees its own.
-- **What's next** — each track shows the step to pick up next and its longest open chain; each step, how
-  many open steps wait on it.
-- **Chains** — one track's dependencies as boxes and arrows, and as a Mermaid diagram for a PR or a doc.
-- **Plugin updated?** — the pane says so and hands you `/reload-plugins`.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 

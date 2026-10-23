@@ -50,7 +50,9 @@ board whatever order the files were read in, and a duplicate changes nothing. It
    step. `session`, `agent`, `agent-end` and `review` are collected. An agent's end speaks for its step
    once every agent on that step has ended.
 3. **The person's layer.** Adds and edits are laid over every plan; triage applies priorities, backlog,
-   archiving and project placement, the person's word beating an agent's.
+   archiving, a track declared done, its rank in the list and project placement, the person's word
+   beating an agent's (archiving, done, rank and placement are the person's alone). Tracks are then
+   ordered by rank — where the person put them, else when they were created — one order for every chat.
 4. **Projects.** A track's project is the person's placement, else the plan that created it, else the
    project most of its events came from — each event counted for the project its session was in *at
    that moment* (a session's project is a timeline of what it said and when).
@@ -80,13 +82,17 @@ board whatever order the files were read in, and a duplicate changes nothing. It
 | Dependents wait on where a moved obligation went | blocked pass |
 | A session's history stays in the project it happened in | `projectAt`, `inferProjects` |
 | A board narrowed to one project keeps unplaced tracks and chats | `forProject`, `workingIn` |
+| A track is done when every step is done, skipped or moved, or the person says so | `trackDone` |
+| Only the person moves a track in the list; nothing an agent does reorders it | `applyTriage`, `rankFor` |
+| A fail is a round at any time; a pass counts only for work reported done before it | `reviewAction` |
 
 ### Derived views
 
 - `summary` — the agents' context: one project's open steps by priority, what is next, what waits on
   what, the other projects in one line.
 - `brief` — one step: why, scope, done-when, review policy, what it waits on and unblocks.
-- `trackMarkdown`, `boardMarkdown` — Copy as Markdown and `roadmap md`.
+- `trackMarkdown`, `boardMarkdown` — Copy as Markdown and `roadmap md`; `viewMarkdown` — what one tab
+  shows (Tracks, Backlog, Done, Days), for the header's Copy.
 - `days`, `doneSeries` — the Days view.
 - `chainGraph` — the dependency graph: the whole board in, optionally one project and one track. With a
   track in focus: its steps in some chain and their neighbours in other tracks (every arrow between two
@@ -106,7 +112,8 @@ write. Nothing is written when an action refuses, and the refusal says why and w
 | `planAction` | review policy on new steps, no dependency loop, policy kept stricter | `plan` |
 | `markAction` | known status; a skip needs a reason; a move needs a reason and a target that exists and does not loop (`checkMove`) | `step`, `triage` |
 | `doneAction` | something shipped | `step`, an `add` per follow-up (backlogged) |
-| `reviewAction` | work reported done to review; the CLI never records a review as Claude | `review` |
+| `reviewAction` | a pass or findings only after the work was reported done (a fail at any time, as history); the CLI never records a review as Claude | `review`, an `add` per follow-up |
+| `codexReviewAction` | a Codex review carried over from Codex's own session log: finished, not a Claude model, a claudex-loop result, recorded once, dated when Codex finished | `review` (`via: "codex-session"`) |
 | `stepAction`, `statusAction` | — | nothing (a read; `step` may pin the chat) |
 
 ## `register.tsx` — the Claude Code side
@@ -125,6 +132,9 @@ write. Nothing is written when an action refuses, and the refusal says why and w
   `chainTrack`, …). The state contract is fixed when a chat starts, so a module reloaded into an older
   chat may not read keys added since: every key newer than the first release is read through a safe
   reader with a fallback and written with a quiet catch.
+- **Diagnostics.** Each chat keeps `diag/<session>.log` (the last 300 lines): module loads, renders that
+  fail, time out or run slow, and renders per minute — the engine reports a failed pane only to its
+  debug log. Logs of chats gone for a week are dropped.
 - **Panes.** `Pane` (the roadmap), `roadmap-chains` (the Chains diagram alone, opened wide), and the band
   above the prompt. Both panes build their data in one `paneData`; a render that fails, or whose data
   does not come within three seconds, says why. Each (re)load of the module asks its open panes to draw
@@ -133,7 +143,8 @@ write. Nothing is written when an action refuses, and the refusal says why and w
 ## `view.tsx` — drawing
 
 Pure functions from `PaneData` to the engine's elements. `drawPane` lays out the header, the update
-notice, This chat, Needs you and the current view; `drawBand` is the line above the prompt;
+notice, This chat, Needs you and the current view (Tracks with its search and project groups, Days,
+Chains, Backlog, Done); a track's actions open under its title from **⋯**; `drawBand` is the line above the prompt;
 `drawChainsPane` is the wide diagram. Charts and diagrams are SVG strings (`progressSvg`, `sparkSvg`,
 `chainSvg`) drawn by the `Svg` element; the terminal gets text instead, and so does a chain whose SVG
 would pass the element's 131 072-character limit. Visual hierarchy: what is shown (the track, the
@@ -141,7 +152,9 @@ project) stands out, its actions (Copy, Wide, Copy as Mermaid) are dimmed.
 
 ## `cli/roadmap.mjs` — other agents
 
-Loads the journal itself, runs the same actions, and writes events and a heartbeat. Its identity comes
+Loads the journal itself, runs the same actions, and writes events and a heartbeat. `review --from-codex`
+finds a Codex session's log under `$CODEX_HOME` (by id, by a claudex-loop `result.json`, or by path inside
+that folder) and hands it to `codexReviewAction`. Its identity comes
 from the process tree (the nearest Codex or Claude process), or from Codex's sandbox where the tree
 cannot be read; a bare `--actor` is a declaration. Its project is the repository it runs in, and
 `status`, `md` and `mermaid` scope to it (`--all` for every project).
