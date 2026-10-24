@@ -25,7 +25,7 @@ import {
 } from './model'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
-import { drawBand, drawChainsPane, drawPane } from './view'
+import { drawBand, drawChainsPane, drawPaneFit } from './view'
 import type { PaneData } from './view'
 import type { RoadmapView } from './view'
 
@@ -353,7 +353,7 @@ async function sync($: EngineInterface): Promise<boolean> {
  * its debug log, which is off in the desktop app; this keeps the last few hundred lines where we can read
  * them. Local only, like the journal.
  */
-const diag = { lines: [] as string[], dirty: false, renders: 0, slowest: 0, since: Date.now() }
+const diag = { lines: [] as string[], dirty: false, renders: 0, slowest: 0, since: Date.now(), fit: 0 }
 
 function note(line: string) {
   diag.lines.push(`${new Date().toISOString()} ${line}`)
@@ -1145,9 +1145,13 @@ export const register: Register = on => {
     const els = $.ui.resolve(e)
     const t0 = Date.now()
     try {
-      const drawn = drawPane(els, await inTime(ms => $.clock.sleep(ms), paneData($, e)))
+      const fitted = drawPaneFit(els, await inTime(ms => $.clock.sleep(ms), paneData($, e)))
       rendered('pane', Date.now() - t0)
-      return drawn
+      if (fitted.fit !== diag.fit) {
+        diag.fit = fitted.fit
+        note(`pane drawn at tightness ${fitted.fit} (${fitted.size} characters)`)
+      }
+      return fitted.tree as any
     } catch (err) {
       rendered('pane', Date.now() - t0, err)
       void flushDiag($)

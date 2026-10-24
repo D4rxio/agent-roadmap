@@ -171,7 +171,12 @@ cannot be read; a bare `--actor` is a declaration. Its project is the repository
 - The `Svg` element draws images, or a script-less frame (`isInteractive`) for hover titles, up to
   131 072 characters of source; it has no scripting, so dragging or zooming a diagram would need a drawing
   module of its own.
-- Older engines refuse a pane with more than 100 000 characters of text: keep text views compact.
+- **Every drawing must stay within 20,000 nodes, 32 levels and 100,000 characters serialized.** Past
+  that the engine refuses it silently (only its debug log says so): the pane keeps the last drawing it
+  took, whose buttons no longer answer, or shows its own "has not drawn" placeholder. `drawPaneFit`
+  measures the pane (`JSON.stringify`, within a few per cent of the engine's count) and draws it tighter
+  until it is under `PANE_BUDGET` (90,000); the test engine does not enforce the bound, so a test measures
+  `ui.drawn()` itself. Keep per-row weight low: actions behind a "⋯", not hidden in every row.
 
 ## Tests
 

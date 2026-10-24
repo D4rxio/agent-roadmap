@@ -82,12 +82,14 @@ or let it read and update one as it works. The pane opens on its own in the desk
   anything, nobody on it, most urgent then most unblocking) and its longest open chain (**chain 4**, in
   steps — never days), and the steps when expanded, each with how many open steps wait on it (**⇢3**,
   down the chain and across tracks).
-  - Hover a step for **Done ✓** to finish it in one press (your word, so it also closes a checkpoint),
-    or click its icon to move it ○ → ◐ → ✓.
+  - Click a step's icon to move it ○ → ◐ → ✓.
+  - Hover a step for **⋯**: its actions open in a row under it — **Done ✓** (your word, so it also closes
+    a checkpoint), **Priority** (pressed in turn: P3 → P2 → P1 → P0), **Copy** (`#track/id title`, ready
+    for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done), **Backlog**
+    (set it aside), and on your own items **✎** (rename) and **✕** (remove).
   - Click a phase's header to open or close it; phases with work left start open, finished ones closed.
-  - Click the `P·` chip to raise its priority: P3 → P2 → P1 → P0.
-  - Hover a step for **Copy** (`#track/id title`, ready for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done) and
-    **Backlog** (set it aside), and on your own items **✎** (rename) and **✕** (remove).
+  - A pane too big for the engine to draw is drawn tighter: long lists show their first steps and
+    "… N more" (the search finds the rest).
   - Hover a track header for **⋯**: its actions open in a row under the title (see below); a finished
     track offers **Close** outright.
   - **+ Add an item** at the bottom of a track adds your own step, marked **✎ you**. Agents may refine

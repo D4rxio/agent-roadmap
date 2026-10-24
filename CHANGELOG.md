@@ -5,6 +5,20 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A pane that went blank, or froze with buttons that did nothing.** The engine refuses a drawing past
+  100,000 characters serialized and keeps the last one it took, its buttons no longer answered — or its
+  own "has not drawn" placeholder. A long track opened (a real one reached 123,000) or the Days tab across
+  every project (147,000) went past it, and the open track was remembered, so a restart did it again. The
+  pane is now measured before it is handed over and drawn tighter until it fits: long lists show their
+  first steps and "… N more" (the search finds any of them), Days shows fewer lines; a note says so, and
+  the chat's diagnostics log records it.
+
+### Changed
+- **A step's actions moved under ⋯**, as a track's did: Done ✓, Copy, Pin, Skip, Backlog, Priority, ✎ and
+  ✕ open in a row under the step. A priority shows on a step only once set. A long track now weighs a
+  third less, so it fits whole more often.
+
 ### Added
 - **`/roadmap refresh`** reads the whole roadmap again from disk, folds it, asks every pane to draw anew
   and opens a fresh Roadmap pane: for a pane left blank or stale, without reloading the plugin. `/roadmap`

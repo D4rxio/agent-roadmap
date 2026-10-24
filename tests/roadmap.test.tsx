@@ -353,10 +353,12 @@ test('from the pane: add an item, click its icon through the states, rename it, 
 
   // Its phase is finished now, so it closed; open it again to rename the item.
   await ui.press({ key: 'phasefold-api::Your items' })
+  await ui.press({ key: `smenu-api/${uid}` })
   await ui.press({ key: `rename-api/${uid}` })
   await ui.input({ key: `edit-api/${uid}`, text: 'iPad + iPhone' })
   expect(await ui.find({ text: new RegExp(`${uid} {2}iPad \\+ iPhone`) })).toBeDefined()
 
+  await ui.press({ key: `smenu-api/${uid}` })
   await ui.press({ key: `remove-api/${uid}` })
   expect(await ui.find({ text: /iPad/ })).toBe(undefined)
   expect(await ui.find({ text: /0%/ })).toBeDefined()
@@ -398,6 +400,57 @@ test('/roadmap show and /roadmap hide open and close the pane, whatever its stat
   expect(open).toBe(false)
   await run('')
   expect(open).toBe(true)
+})
+
+test('a pane too big to draw is drawn tighter, never past the engine size limit', async ($, on) => {
+  // The engine refuses a drawing over 100,000 characters serialized and leaves the pane blank or frozen.
+  const off = { required: false }
+  const big = {
+    kind: 'plan',
+    at: 1000,
+    session: 's',
+    track: 'big',
+    title: 'A very long track',
+    phases: [{ name: 'Everything', steps: Array.from({ length: 300 }, (_, i) => ({ id: `${i + 1}`, title: `Step number ${i + 1} with a reasonably long title to weigh it`, review: off })) }],
+  }
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(big)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-big' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'fold-big' })
+    expect(JSON.stringify(await ui.drawn()).length).toBeLessThan(100_000)
+    expect(await ui.find({ text: /Long lists are cut to fit the pane/ })).toBeDefined()
+    expect(await ui.find({ text: /… \d+ more steps — the search finds any of them/ })).toBeDefined()
+    // Still alive: other presses work, and the search reaches a step that was cut.
+    await ui.input({ key: 'search', text: 'number 250', kind: 'change' })
+    expect(await ui.find({ text: /Step number 250 / })).toBeDefined()
+    await ui.input({ key: 'search', text: '', kind: 'change' })
+    await ui.press({ key: 'fold-big' })
+    expect(await ui.find({ text: /Long lists are cut/ })).toBe(undefined)
+    await ui.unmount()
+  }
+  expect(files.get('/home/t/.claude/roadmap/diag/session-big.log') ?? '').toMatch(/pane drawn at tightness [1-3]/)
 })
 
 test('/roadmap refresh reads the roadmap again, redraws, and opens a fresh pane', async ($, on) => {
@@ -523,6 +576,9 @@ test('from the pane: the chip raises priority, ⤓ sets a step aside, the Backlo
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'fold-api' })
   expect(await ui.find({ text: /^P2$/ })).toBeDefined()
+  // A step's actions wait under "⋯"; the priority is pressed in turn, so the row stays open.
+  expect(await ui.find({ key: 'prio-api/1.2' })).toBe(undefined)
+  await ui.press({ key: 'smenu-api/1.2' })
   await ui.press({ key: 'prio-api/1.2' })
   await ui.press({ key: 'prio-api/1.2' })
   expect(await ui.find({ text: /^P0$/ })).toBeDefined()
@@ -531,6 +587,7 @@ test('from the pane: the chip raises priority, ⤓ sets a step aside, the Backlo
   expect(await ui.find({ text: /^P0$/ })).toBeDefined()
 
   // ⤓ sets 1.1 aside: 0/1 and a Backlog section; the Backlog tab restores it.
+  await ui.press({ key: 'smenu-api/1.1' })
   await ui.press({ key: 'shelve-api/1.1' })
   expect(await ui.find({ text: /0\/1/ })).toBeDefined()
   expect(await ui.find({ text: /Backlog 1/ })).toBeDefined()
@@ -852,10 +909,12 @@ test('each chat holds its item: the pane leads with it, others see who holds wha
     expect(await ui.find({ text: /● empty-trash fix/ })).toBeDefined()
     expect(await ui.find({ text: /● this chat/ })).toBeDefined()
     expect(await ui.find({ text: /api\/1\.1 {2}Map endpoints/ })).toBeDefined()
+    await ui.press({ key: 'smenu-api/1.2' })
     await ui.press({ key: 'pin-api/1.2' })
     expect(await ui.find({ text: /api\/1\.2 {2}Pagination/ })).toBeDefined()
     await ui.press({ key: 'unpin' })
     expect(await ui.find({ text: /This chat/ })).toBe(undefined)
+    await ui.press({ key: 'smenu-api/1.1' })
     await ui.press({ key: 'pin-api/1.1' })
     expect(await ui.find({ text: /api\/1\.1 {2}Map endpoints/ })).toBeDefined()
     await ui.unmount()
@@ -992,6 +1051,7 @@ test('from the tool and the pane: a skip needs a reason; the person confirms a p
   expect(await ui.find({ text: /0\/1/ })).toBeDefined()
 
   // The person skips 1.2 directly, with a reason typed in the row.
+  await ui.press({ key: 'smenu-api/1.2' })
   await ui.press({ key: 'skipit-api/1.2' })
   await ui.input({ key: 'skip-api/1.2', text: 'out of scope this quarter' })
   // Both steps are settled now, so the phase closed by default; open it to look.
@@ -1048,11 +1108,19 @@ test('Done ✓ marks a step completed in one press, a checkpoint included; done 
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'fold-api' })
     if (surface === 'terminal') {
+      await ui.press({ key: 'smenu-api/1' })
       await ui.press({ key: 'done-api/1' })
       expect(await ui.find({ text: /50%/ })).toBeDefined()
+      await ui.press({ key: 'smenu-api/2' })
       await ui.press({ key: 'done-api/2' })
       expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
+      // The finished phase folded; opened, a done step's actions offer no Done.
+      await ui.press({ key: 'phasefold-api::P' })
+      await ui.press({ key: 'smenu-api/1' })
+      expect(await ui.find({ key: 'scopy-api/1' })).toBeDefined()
       expect(await ui.find({ key: 'done-api/1' })).toBe(undefined)
+      await ui.press({ key: 'smenu-api/1' })
+      await ui.press({ key: 'phasefold-api::P' })
     } else {
       expect(await ui.find({ text: /✓ Done/ })).toBeDefined()
     }
@@ -1098,6 +1166,7 @@ test('Copy puts a track title, or a step as "#track/id title", on the clipboard 
   expect(await ui.find({ key: 'tcopy-api' })).toBe(undefined)
   expect(await ui.find({ text: /Map endpoints/ })).toBe(undefined)
   await ui.press({ key: 'fold-api' })
+  await ui.press({ key: 'smenu-api/1.2' })
   await ui.press({ key: 'scopy-api/1.2' })
   expect(copied.at(-1)).toBe('#api/1.2 Pagination')
   expect(await ui.find({ text: /Map endpoints/ })).toBeDefined()
@@ -2664,6 +2733,7 @@ test('the Chains tab draws the graph (a text tree in the terminal) and copies it
   // Pinned to api/2, the tab says where this chat stands in the chain.
   const pinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await pinned.press({ key: 'fold-api' })
+  await pinned.press({ key: 'smenu-api/2' })
   await pinned.press({ key: 'pin-api/2' })
   await pinned.press({ key: 'view-chains' })
   expect(await pinned.find({ text: /● this chat/ })).toBeDefined()

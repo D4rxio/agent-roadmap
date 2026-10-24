@@ -19,6 +19,12 @@ export type PaneData = {
   /** Whether the Chains tab shows the finished steps it would fold away. */
   chainDone?: boolean
   onChainDone?: (show: boolean) => void
+  /**
+   * How tightly the pane is drawn to stay within the engine's size limit: 0 everything; 1 and 2 show at
+   * most PER_FIT[fit] steps of an open list, the rest summed up in a line; 3 also folds every track but
+   * the one this chat holds. Set by `drawPaneFit`, never by hand.
+   */
+  fit?: number
   /** What the person searches for in the Tracks view, and how a change of it is kept. */
   search?: string
   onSearch?: (query: string) => void
@@ -170,7 +176,8 @@ const PRIO_COLOR: Record<RoadmapPriority, string> = { P0: 'error', P1: 'warning'
 function prioChip(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
   const { Text } = els
   return (
-    Btn(els, d, { key: `prio-${t.name}/${s.id}`, plain: true, onPress: () => d.onPriority(t.name, s.id, nextPriority(s.priority)) }, s.priority ?? "P·", <Text>{s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>P·</Text>}</Text>)
+    // Pressed in turn (P3 → P2 → P1 → P0 → none), so it keeps the step's action row open.
+    Btn(els, d, { key: `prio-${t.name}/${s.id}`, plain: true, onPress: () => d.onPriority(t.name, s.id, nextPriority(s.priority)) }, `Priority ${s.priority ?? '·'}`, <Text>{'Priority '}{s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : <Text dimColor>·</Text>}</Text>)
   )
 }
 
@@ -808,7 +815,7 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>, s
   const pct = total ? Math.round((done / total) * 100) : 0
   const finished = trackDone(t)
   const menuOpen = d.editing === `menu:${t.name}`
-  const isOpen = only ? true : d.expanded.includes(t.name)
+  const isOpen = only ? true : d.expanded.includes(t.name) && ((d.fit ?? 0) < 3 || d.focus.split('/')[0] === t.name)
   const active = t.steps.filter(s => !s.backlog)
   const shelved = t.steps.filter(s => s.backlog && (!only || only.has(s.id))).sort(byPriority)
   const blocked = active.filter(s => s.status === 'blocked').length
@@ -900,14 +907,22 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>, s
                 ),
                 `${pDone}/${own.length}`,
               )}
-              {open ? own.map(s => stepRow(els, d, t, s)) : null}
+              {open
+                ? (() => {
+                    const f = fitSteps(d, (x: RoadmapStep) => `${t.name}/${x.id}`, own)
+                    return [...f.shown.map(s => stepRow(els, d, t, s)), moreLine(els, `more-${pkey}`, f.hidden)]
+                  })()
+                : null}
             </Box>
           )
         })}
       {isOpen && shelved.length ? (
         <Box key={`shelf-${t.name}`} flexDirection="column" marginTop={1}>
           {Row(els, `shelf-h-${t.name}`, <Text dimColor bold>Backlog</Text>, `${shelved.length} set aside`)}
-          {shelved.map(s => stepRow(els, d, t, s))}
+          {(() => {
+            const f = fitSteps(d, (x: RoadmapStep) => `${t.name}/${x.id}`, shelved)
+            return [...f.shown.map(s => stepRow(els, d, t, s)), moreLine(els, `more-shelf-${t.name}`, f.hidden)]
+          })()}
         </Box>
       ) : null}
       {isOpen && els.Input ? (
@@ -978,10 +993,12 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
     )
   }
   const right = stepRight(s, d)
-  return (
-    <Box key={`step-${ref}`} flexDirection="row" gap={1}>
+  const menuOpen = d.editing === `smenu:${ref}`
+  const row = (
+    <Box key={menuOpen ? `steprow-${ref}` : `step-${ref}`} flexDirection="row" gap={1}>
       {Btn(els, d, { key: `cycle-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, nextStatus(s.status)) }, ICONS[s.status], <Text><Text color={COLOR[s.status]}>{ICONS[s.status]}</Text></Text>)}
-      {prioChip(els, d, t, s)}
+      {/* A priority shows only once set; it is set under "⋯". */}
+      {s.priority ? <Text bold color={PRIO_COLOR[s.priority]}>{s.priority}</Text> : null}
       {Line(els, `title-${ref}`, [
         { text: `${s.id}  ${s.title}`, main: true, dim: s.status === 'done' || s.status === 'skipped' || s.status === 'moved' || s.backlog, strike: s.status === 'skipped' },
         ...(s.review?.required
@@ -1017,40 +1034,80 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       {s.backlog ? (
         Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: () => d.onBacklog(t.name, s.id, false) }, s.backlog ? "Restore" : "Backlog", <Text><Text color="suggestion">↺ Restore</Text></Text>)
       ) : null}
-      {/* Row actions stay out of sight until the pointer is on the row (desktop); the terminal shows them. */}
-      <Box
-        flexDirection="row"
-        gap={1}
-        display={d.canDraw ? 'none' : 'flex'}
-        hover={d.canDraw ? { display: 'flex' } : undefined}
-      >
-        {s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved' ? (
-          // The person's own word: it also closes a checkpoint or a step awaiting confirmation.
-          Btn(els, d, { key: `done-${ref}`, plain: true, onPress: () => d.onCycle(t.name, s.id, 'done') }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
-        ) : null}
+      {/* One quiet "⋯" holds the step's actions, so a long track stays light enough to draw. */}
+      <Box flexDirection="row" display={d.canDraw && !menuOpen ? 'none' : 'flex'} hover={d.canDraw && !menuOpen ? { display: 'flex' } : undefined}>
         {Btn(
           els,
           d,
-          { key: `scopy-${ref}`, plain: true, onPress: (press: any) => d.onCopyText(`#${ref} ${s.title}`, press?.surface ?? 'desktop') },
-          'Copy',
-          <Text><Text dimColor>Copy</Text></Text>,
+          { key: `smenu-${ref}`, plain: true, onPress: () => d.onStartEdit(menuOpen ? '' : `smenu:${ref}`) },
+          menuOpen ? '✕' : '⋯',
+          <Text><Text dimColor>{menuOpen ? '✕' : '⋯'}</Text></Text>,
         )}
-        {d.focus !== ref ? (
-          Btn(els, d, { key: `pin-${ref}`, plain: true, onPress: () => d.onPin(ref) }, "Pin", <Text><Text dimColor>Pin</Text></Text>)
-        ) : null}
-        {s.status !== 'skipped' && s.status !== 'done' && s.status !== 'moved' && els.Input ? (
-          Btn(els, d, { key: `skipit-${ref}`, plain: true, onPress: () => d.onStartEdit(`skip:${ref}`) }, "Skip", <Text><Text dimColor>Skip</Text></Text>)
-        ) : null}
-        {!s.backlog ? (
-          Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: () => d.onBacklog(t.name, s.id, true) }, s.backlog ? "Restore" : "Backlog", <Text><Text dimColor>Backlog</Text></Text>)
-        ) : null}
-        {s.addedBy ? (
-          Btn(els, d, { key: `rename-${ref}`, plain: true, onPress: () => d.onStartEdit(ref) }, "Rename", <Text><Text dimColor>✎</Text></Text>)
-        ) : null}
-        {s.addedBy ? (
-          Btn(els, d, { key: `remove-${ref}`, plain: true, onPress: () => d.onRemove(t.name, s.id) }, "Remove", <Text><Text dimColor>✕</Text></Text>)
-        ) : null}
       </Box>
+    </Box>
+  )
+  return menuOpen ? (
+    <Box key={`step-${ref}`} flexDirection="column">
+      {row}
+      {stepMenu(els, d, t, s)}
+    </Box>
+  ) : (
+    row
+  )
+}
+
+/** How many steps of one open list each tightness shows. */
+const PER_FIT = [Infinity, 12, 4, 4]
+
+/**
+ * At most as many steps as the pane's tightness allows (this chat's step always among them), and how many
+ * were left out.
+ */
+function fitSteps<T extends { id: string }>(d: PaneData, ref: (x: T) => string, list: T[]): { shown: T[]; hidden: number } {
+  const cap = PER_FIT[d.fit ?? 0] ?? Infinity
+  if (list.length <= cap) return { shown: list, hidden: 0 }
+  const shown = list.slice(0, cap)
+  const mine = list.find(x => ref(x) === d.focus)
+  if (mine && !shown.includes(mine)) shown[shown.length - 1] = mine
+  return { shown, hidden: list.length - shown.length }
+}
+
+/** The line that stands for the steps a tight pane left out. */
+function moreLine(els: Els, key: string, hidden: number) {
+  const { Text } = els
+  return hidden ? (
+    <Text key={key} dimColor wrap="truncate-end">{`   … ${hidden} more step${hidden === 1 ? '' : 's'} — the search finds any of them`}</Text>
+  ) : null
+}
+
+/** A step's actions, under it once "⋯" is pressed; each closes the row. */
+function stepMenu(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
+  const { Box, Text } = els
+  const ref = `${t.name}/${s.id}`
+  const then = (act: () => void) => () => {
+    act()
+    d.onStartEdit('')
+  }
+  const open = s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved'
+  return (
+    <Box key={`smenu-row-${ref}`} flexDirection="row" flexWrap="wrap" columnGap={2} marginLeft={4}>
+      {open
+        ? // The person's own word: it also closes a checkpoint or a step awaiting confirmation.
+          Btn(els, d, { key: `done-${ref}`, plain: true, onPress: then(() => d.onCycle(t.name, s.id, 'done')) }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
+        : null}
+      {prioChip(els, d, t, s)}
+      {Btn(
+        els,
+        d,
+        { key: `scopy-${ref}`, plain: true, onPress: (press: any) => { d.onCopyText(`#${ref} ${s.title}`, press?.surface ?? 'desktop'); d.onStartEdit('') } },
+        'Copy',
+        <Text>Copy</Text>,
+      )}
+      {d.focus !== ref ? Btn(els, d, { key: `pin-${ref}`, plain: true, onPress: then(() => d.onPin(ref)) }, 'Pin', <Text>Pin</Text>) : null}
+      {open && els.Input ? Btn(els, d, { key: `skipit-${ref}`, plain: true, onPress: () => d.onStartEdit(`skip:${ref}`) }, 'Skip', <Text>Skip</Text>) : null}
+      {!s.backlog ? Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: then(() => d.onBacklog(t.name, s.id, true)) }, 'Backlog', <Text>Backlog</Text>) : null}
+      {s.addedBy ? Btn(els, d, { key: `rename-${ref}`, plain: true, onPress: () => d.onStartEdit(ref) }, 'Rename', <Text>✎ Rename</Text>) : null}
+      {s.addedBy ? Btn(els, d, { key: `remove-${ref}`, plain: true, onPress: then(() => d.onRemove(t.name, s.id)) }, 'Remove', <Text>✕ Remove</Text>) : null}
     </Box>
   )
 }
@@ -1105,7 +1162,10 @@ const KIND: Record<string, { icon: string; color: string }> = {
 function daysView(els: Els, d: PaneData) {
   const { Box, Text, Svg } = els
   const series = doneSeries(d.board, d.now, d.tz, 14)
-  const list = days(d.board, d.now, d.tz, 14)
+  // A tight pane shows fewer days and fewer lines a day (see drawPaneFit).
+  const fit = d.fit ?? 0
+  const perDay = [12, 6, 3, 2][fit] ?? 2
+  const list = days(d.board, d.now, d.tz, 14).slice(0, [14, 14, 7, 4][fit] ?? 4)
   return (
     <Box key="days" flexDirection="column">
       {Row(els, 'spark-h', <Text dimColor>Steps done, last 14 days</Text>, `${series.reduce((a, b) => a + b, 0)} total`)}
@@ -1131,7 +1191,7 @@ function daysView(els: Els, d: PaneData) {
                 .filter(Boolean)
                 .join(' · '),
             )}
-            {steps.slice(0, 12).map((x, i) =>
+            {steps.slice(0, perDay).map((x, i) =>
               Row(
                 els,
                 `de-${day.day}-${i}`,
@@ -1142,7 +1202,7 @@ function daysView(els: Els, d: PaneData) {
                 when(x.at, d.now, d.tz),
               ),
             )}
-            {steps.length > 12 ? <Text dimColor>{`  … ${steps.length - 12} more`}</Text> : null}
+            {steps.length > perDay ? <Text dimColor>{`  … ${steps.length - perDay} more`}</Text> : null}
             {steps.length === 0 ? <Text dimColor>{`  ${sessions} sessions, no step moved`}</Text> : null}
           </Box>
         )
@@ -1259,18 +1319,48 @@ function backlogView(els: Els, d: PaneData) {
         </Box>
       ) : null}
       {shelved.length ? <Text bold>Steps</Text> : null}
-      {shelved.map(({ t, s }) => (
-        <Box key={`bl-${t.name}/${s.id}`} flexDirection="column" marginTop={1}>
-          <Text dimColor wrap="truncate-end">{t.title}</Text>
-          {stepRow(els, d, t, s)}
-        </Box>
-      ))}
+      {(() => {
+        const f = fitSteps(d, (x: { t: RoadmapTrack; s: RoadmapStep; id: string }) => `${x.t.name}/${x.s.id}`, shelved.map(x => ({ ...x, id: `${x.t.name}/${x.s.id}` })))
+        return [
+          ...f.shown.map(({ t, s }) => (
+            <Box key={`bl-${t.name}/${s.id}`} flexDirection="column" marginTop={1}>
+              <Text dimColor wrap="truncate-end">{t.title}</Text>
+              {stepRow(els, d, t, s)}
+            </Box>
+          )),
+          moreLine(els, 'more-backlog', f.hidden),
+        ]
+      })()}
     </Box>
   )
 }
 
 /** What the notice says, and the command a chat runs to load the new code in place. */
 export const RELOAD = '/reload-plugins'
+
+/**
+ * The engine refuses a drawing past 100,000 characters serialized (or 20,000 nodes) and leaves the pane
+ * blank or frozen, its buttons dead. The pane is drawn, measured, and drawn tighter until it fits.
+ */
+export const PANE_BUDGET = 90_000
+
+export function sizeOf(tree: unknown): number {
+  try {
+    return JSON.stringify(tree)?.length ?? 0
+  } catch {
+    return 0
+  }
+}
+
+export function drawPaneFit(els: Els, d: PaneData): { tree: unknown; fit: number; size: number } {
+  let last = { tree: undefined as unknown, fit: 0, size: 0 }
+  for (const fit of [0, 1, 2, 3]) {
+    const tree = drawPane(els, { ...d, fit })
+    last = { tree, fit, size: sizeOf(tree) }
+    if (last.size <= PANE_BUDGET) return last
+  }
+  return last
+}
 
 export function drawPane(els: Els, d: PaneData) {
   const { Box, Text } = els
@@ -1303,6 +1393,15 @@ export function drawPane(els: Els, d: PaneData) {
     <Box flexDirection="column">
       {header(els, d)}
       {stale}
+      {d.fit ? (
+        <Text key="fit-note" color="warning" wrap="truncate-end">
+          {d.view === 'days'
+            ? 'Fewer days and lines are shown to fit the pane — ⧉ Copy days lists them all.'
+            : d.fit >= 3
+              ? 'Too much to draw at once: tracks are folded, open one at a time.'
+              : 'Long lists are cut to fit the pane — the search finds any step.'}
+        </Text>
+      ) : null}
       {thisChat(els, d)}
       {needsYou(els, d)}
       {d.view === 'days'
