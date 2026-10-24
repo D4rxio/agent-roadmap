@@ -10,6 +10,13 @@ versions follow [Semantic Versioning](https://semver.org/).
   and opens a fresh Roadmap pane: for a pane left blank or stale, without reloading the plugin. `/roadmap`
   and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
 
+### Changed
+- **A failed review hands its findings to the person.** Agents were told to fix a failed review's findings
+  and get it reviewed again; now the findings go to the person, who decides what is fixed — a failed review
+  alone does not authorize fixes, more scope or changes to the track.
+- **No tool or loop is recommended for a review.** A step's brief says a cross-model review is required and
+  how a verdict gets recorded (or carried over with `--from-codex`); how it is reviewed is the person's call.
+
 ## [0.6.0] — 2026-10-23
 
 ### Added

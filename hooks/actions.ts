@@ -119,7 +119,7 @@ function waiting(
   if (s?.reviewPending) {
     const who = s.review?.independence === 'cross-model' ? `a cross-model review (the reviewer must not be ${family(s.implementer?.actor)})` : 'an independent review'
     return s.reviewState === 'failed'
-      ? `waits for ${who}: the last one failed — fix the findings and have it reviewed again`
+      ? `waits for ${who}: the last one failed — its findings go to the person, who decides what is fixed — a failed review alone does not authorize fixes, more scope or changes to the track`
       : `waits for ${who} before it counts as done — have it reviewed and recorded with roadmap review`
   }
   return "awaiting the person's confirmation (checkpoint or reopened after failure)"
@@ -468,10 +468,11 @@ export function stepAction(ctx: ActionContext, input: Record<string, unknown>): 
     const impl = family(step.implementer?.actor ?? ctx.actor)
     if (step.review.independence === 'cross-model' && impl === 'claude' && ctx.hints?.codexInstalled) {
       lines.push(
-        `Codex is installed here: when the work is ready, have Codex review it (e.g. the codex-review skill of claudex-loop, ` +
-          `or \`codex exec\`), and have Codex itself record the verdict with: ` +
+        // Where a review comes from is the person's call: the mod says what is required and how a verdict
+        // gets recorded, never which tool or loop to run.
+        `Codex is installed here. When Codex reviews it, Codex records the verdict itself with: ` +
           `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --verdict pass|findings|fail --evidence "…". ` +
-          `If Codex ran read-only and could not write it (claudex-loop reviews that way), carry its verdict over yourself after each round: ` +
+          `If that review ran read-only and could not write it (claudex-loop reviews that way), carry its verdict over after each round: ` +
           `${ctx.hints.cli ?? 'node ~/.claude/mods/roadmap/cli/roadmap.mjs'} review ${ref.track}/${ref.id} --from-codex <the round's result.json> ` +
           `(the verdict is read from Codex's own session log; add --follow-ups to file a passed review's findings).`,
       )

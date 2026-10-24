@@ -26,8 +26,8 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   **Never `mark … running` to review**: running means you work on the implementation — it would reopen
   the work and drop the report you came to review (the CLI refuses it without `--reopen`). To show you
   are on it, `$R review <track>/<id> --start` (writes nothing). Record **every round**, a `fail` included,
-  not only the last one: after a fail the implementer fixes and reports done again, you review again, and
-  the person sees each round in the pane. Findings that need work later go with the review as
+  not only the last one; the person sees each round in the pane. A fail's findings go to the person, who
+  decides what is fixed: a failed review alone does not authorize fixes, more scope or changes to the track. Findings that need work later go with the review as
   `--follow-up "title[:P1]"` (repeatable): each becomes a follow-up step in the backlog — also after the
   person has accepted the review (record one more round with the same verdict and the follow-ups).
   In a read-only sandbox (claudex-loop runs reviews that way) the CLI cannot write: end with your review

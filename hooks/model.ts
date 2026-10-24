@@ -1256,7 +1256,7 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
             : s.reviewState === 'reviewed'
               ? `A cross-model review passed (${s.passedReview?.actor ?? 'another model'}${s.passedReview?.via ? `, via ${s.passedReview.via}` : ''}); the person confirms it in the Roadmap pane — no agent can prove which model wrote a review.`
               : s.reviewState === 'failed'
-              ? 'The last qualifying review FAILED: fix the findings, then get it reviewed again.'
+              ? 'The last qualifying review FAILED: present its findings to the person, who decides what is fixed. A failed review alone does not authorize fixes, more scope or changes to the track.'
               : 'No qualifying review yet: a worker\'s done waits for one.'
         }`
       : s.review
@@ -1325,7 +1325,7 @@ export function summary(whole: RoadmapBoard, opts: { open?: number; project?: st
                 ? ` (a move to ${s.movedTo ?? '?'} awaits the person: ${s.moveReason ?? 'no reason'})`
                 : s.reviewPending
                 ? s.reviewState === 'failed'
-                  ? ' (review failed: fix the findings, then ask for a new review)'
+                  ? ' (review failed: its findings go to the person to decide)'
                   : ' (waits for its review)'
                 : s.reviewState === 'reviewed'
                   ? ` (reviewed by ${s.passedReview?.actor ?? 'another model'}: ${s.passedReview?.verdict ?? 'pass'} — the person confirms)`

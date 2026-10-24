@@ -1503,6 +1503,8 @@ test('new steps must carry a review policy; existing ones may go without; Codex 
   expect(hinted.text).toContain('the reviewer must not be claude')
   expect(hinted.text).toContain('Codex is installed here')
   expect(hinted.text).toContain('roadmap review api/1 --verdict')
+  // It says what is required and how a verdict is recorded, never which tool or loop to run.
+  expect(hinted.text).not.toMatch(/have Codex review it|codex-review skill|codex exec/)
   expect(stepAction(ctx(events), { step: 'api/1' }).text).not.toContain('Codex is installed')
 
   // Still running: nothing reported done, nothing to review yet.
@@ -2916,6 +2918,12 @@ test('a Codex review carried over from its own session log: dated when Codex fin
   expect(after.reviewState).toBe('missing')
   expect(after.status).toBe('awaiting')
   expect(after.reviewRounds?.map(r => r.verdict)).toEqual(['fail'])
+  // A failed review hands its findings to the person; it never tells the implementer to fix them.
+  const failedBoard = fold([...events, ...(codexReviewAction(ctx, { step: 'api/1', rollout: rollout({ ...low, verdict: 'REVISE' }) }).emit)], [], ctx.now)
+  for (const said of [brief(failedBoard, 'api', '1') ?? '', summary(failedBoard)]) {
+    expect(said).toMatch(/findings (go )?to the person/)
+    expect(said).not.toMatch(/fix the findings/)
+  }
   // The same for a review written directly on work still running: a fail is a round, a pass waits for done.
   const running = events.slice(0, 2)
   const direct = { events: running, lives: [], now: Date.parse('2026-10-22T12:00:00Z'), session: 'x9', actor: 'codex', via: 'codex-sandbox', channel: 'cli' as const }
