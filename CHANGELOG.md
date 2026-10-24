@@ -5,6 +5,11 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`/roadmap refresh`** reads the whole roadmap again from disk, folds it, asks every pane to draw anew
+  and opens a fresh Roadmap pane: for a pane left blank or stale, without reloading the plugin. `/roadmap`
+  and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
+
 ## [0.6.0] — 2026-10-23
 
 ### Added

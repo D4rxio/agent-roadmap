@@ -71,6 +71,7 @@ or let it read and update one as it works. The pane opens on its own in the desk
 |---|---|
 | `/roadmap` | show or hide the pane |
 | `/roadmap show`, `/roadmap hide` | open or close the pane |
+| `/roadmap refresh` | read the roadmap again and redraw a blank or stale pane, without reloading the plugin |
 | `/roadmap copy` | copy the whole roadmap as Markdown |
 | `/roadmap band` | show or hide the one-line summary above the prompt |
 

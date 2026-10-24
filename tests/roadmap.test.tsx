@@ -400,6 +400,65 @@ test('/roadmap show and /roadmap hide open and close the pane, whatever its stat
   expect(open).toBe(true)
 })
 
+test('/roadmap refresh reads the roadmap again, redraws, and opens a fresh pane', async ($, on) => {
+  const files = new Map<string, string>([['/home/t/.claude/roadmap/events/1000-o-x.json', JSON.stringify(PLAN)]])
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  let opened = 0
+  let closed = 0
+  let redraws = 0
+  let open = false
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-refresh' }))
+  on('store.get', () => ({ value: undefined }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.panes', () => ({ value: open ? [{ id: 'roadmap', title: 'Roadmap' } as never] : [] }))
+  on('ui.open', () => {
+    opened++
+    open = true
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', () => {
+    closed++
+    open = false
+    return { value: undefined }
+  })
+  on('ui.invalidate', () => {
+    redraws++
+    return { value: undefined }
+  })
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  const run = (args: string) => $.command.run({ command: 'roadmap', args } as never)
+  await run('show')
+  // Another chat finishes a step meanwhile; refresh reads everything again and redraws a fresh pane.
+  files.set('/home/t/.claude/roadmap/events/2000-o-y.json', JSON.stringify({ kind: 'step', at: 2000, session: 'p', track: 'api', id: '1.1', status: 'done', origin: 'person' }))
+  const before = { opened, closed, redraws }
+  const r: any = await run('refresh')
+  expect(String(r?.text ?? '')).toContain('read again (2 events)')
+  expect(closed).toBe(before.closed + 1)
+  expect(opened).toBe(before.opened + 1)
+  expect(redraws).toBeGreaterThan(before.redraws)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /1\/2/ })).toBeDefined()
+  await ui.unmount()
+  expect(files.get('/home/t/.claude/roadmap/diag/session-refresh.log') ?? '').toContain('refresh: 2 events read again')
+})
+
 test("priority and backlog: the person's word stands over an agent's; backlog leaves progress and next work", async () => {
   const tri = (at: number, id: string, change: object, origin: 'person' | 'agent') =>
     ({ kind: 'triage', at, session: origin, track: 'api', id, ...change, origin }) as RoadmapEvent

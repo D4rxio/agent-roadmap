@@ -564,7 +564,7 @@ function cannotDraw(els: any, err: unknown) {
   return (
     <Box flexDirection="column">
       <Text color="warning" wrap="wrap">{`The roadmap could not draw this pane: ${err instanceof Error ? err.message : String(err)}`}</Text>
-      <Text dimColor wrap="wrap">Run /reload-plugins, or restart this chat, to load the plugin cleanly; other chats are not affected.</Text>
+      <Text dimColor wrap="wrap">Run /roadmap refresh to read the roadmap again and redraw; if that does not help, /reload-plugins (or restarting this chat) loads the plugin cleanly. Other chats are not affected.</Text>
     </Box>
   )
 }
@@ -572,6 +572,25 @@ function cannotDraw(els: any, err: unknown) {
 /** Opens the Chains diagram in a pane of its own, as wide as the dock allows; Escape closes it. */
 async function openChains($: EngineInterface) {
   await $.ui.open({ id: CHAINS, title: 'Chains', focus: true, closeOnEscape: true, columns: 200, rows: 40 })
+}
+
+/**
+ * Reads the whole journal again from disk, folds it, and asks every pane to draw anew: the data reloaded,
+ * the module kept. For a pane left blank or stale — `/reload-plugins` reloads the code too.
+ */
+async function refresh($: EngineInterface): Promise<number> {
+  const t0 = Date.now()
+  journal.seen = new Set()
+  journal.events = []
+  journal.loose = new Map()
+  journal.bundles = new Set()
+  journal.lives = new Map()
+  await sync($).catch(() => undefined)
+  await republish($)
+  note(`refresh: ${journal.events.length} events read again in ${Date.now() - t0} ms`)
+  void flushDiag($)
+  $.ui.invalidate('ui.render')
+  return journal.events.length
 }
 
 async function openPane($: EngineInterface) {
@@ -739,8 +758,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'roadmap',
       description:
-        'Shared roadmap: `show` / `hide` the pane (no argument toggles it), `copy` copies it as Markdown, `band` toggles the line above the prompt',
-      argumentHint: '[show|hide|copy|band]',
+        'Shared roadmap: `show` / `hide` the pane (no argument toggles it), `refresh` reads the roadmap again and redraws a blank or stale pane, `copy` copies it as Markdown, `band` toggles the line above the prompt',
+      argumentHint: '[show|hide|refresh|copy|band]',
     })
     await $.tool.register({
       name: 'plan',
@@ -1047,8 +1066,16 @@ export const register: Register = on => {
       const done = await $.ui.copy({ text: boardMarkdown(b, Date.now(), await read($, tzOffset)) })
       return { text: done.isCopied ? 'Roadmap copied as Markdown.' : `Could not copy: ${done.reason}` }
     }
+    if (arg === 'refresh') {
+      // A fresh pane too: one the host left blank gets a new one, drawn from the data just read.
+      const n = await refresh($)
+      if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
+      await openPane($)
+      return { text: `Roadmap read again (${n} events) and redrawn. If a pane stays blank, /reload-plugins reloads the plugin itself.` }
+    }
     await sync($).catch(() => undefined)
     await republish($)
+    $.ui.invalidate('ui.render')
     if (arg === 'show') {
       await openPane($)
       return { text: 'Roadmap shown.' }
