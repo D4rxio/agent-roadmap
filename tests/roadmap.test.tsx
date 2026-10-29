@@ -4,7 +4,7 @@ import { checkMove, codexReviewAction, doneAction, markAction, planAction, revie
 import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, matches, whoseReview } from '../hooks/view'
 
-import { FOLLOW_UPS, STALE_MS, rankFor, viewMarkdown, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, when } from '../hooks/model'
+import { FOLLOW_UPS, STALE_MS, rankFor, viewMarkdown, YOUR_PHASE, attention, boardMarkdown, chainGraph, chainText, forProject, mermaidOf, workingIn, brief, nextId, dayLabel, dayOf, days, family, findCycle, fold, progress, parseRef, refInText, summary, timelineBar, trackMarkdown, transientProject, when } from '../hooks/model'
 import type { RoadmapEvent } from '../types'
 
 const PANE = {
@@ -2062,6 +2062,45 @@ test('projects: a track belongs to the repo it was laid out from; the person can
   expect(brief(board, 'api', '1')).toContain('project: api')
 })
 
+test('a spare folder or a scratchpad is nobody\'s project', () => {
+  const off = { required: false }
+  const plan = (at: number, track: string, session: string) =>
+    ({ kind: 'plan', at, session, track, phases: [{ name: 'P', steps: [{ id: '1', title: track, review: off }] }] }) as RoadmapEvent
+  const session = (at: number, id: string, project: string) => ({ kind: 'session', at, session: id, title: id, actor: 'claude', project }) as RoadmapEvent
+  const board = fold(
+    [
+      session(1, 'a', '/home/t/.claude/spares/spare-S7yTkB'),
+      plan(2, 'spec', 'a'),
+      { kind: 'plan', at: 3, session: 'b', track: 'tmp', project: '/private/tmp/claude-501/x/scratchpad', phases: [{ name: 'P', steps: [{ id: '1', title: 't', review: off }] }] } as RoadmapEvent,
+      session(4, 'c', '/repos/web'),
+      plan(5, 'web', 'c'),
+      // The person's word on a passing folder is dropped: the place before it stands.
+      { kind: 'triage', at: 6, session: 'c', track: 'web', project: '/home/t/.claude/spares/spare-x', origin: 'person' } as RoadmapEvent,
+      // A chat that waited in a spare folder and moved on works where it moved.
+      session(7, 'a', '/repos/api'),
+    ],
+    [{ session: 'd', title: 'd', at: 8, project: '/tmp/claude-501/y', agents: [] }],
+    9,
+  )
+  expect(board.projects.map(p => p.name)).toEqual(['api', 'web'])
+  // Laid out by a chat that never said where it was before it moved: it counts for where the chat moved.
+  expect(board.tracks.find(t => t.name === 'spec')?.project).toBe('/repos/api')
+  expect(board.tracks.find(t => t.name === 'tmp')?.project).toBe(undefined)
+  expect(board.tracks.find(t => t.name === 'web')?.project).toBe('/repos/web')
+  expect(board.sessions.find(s => s.id === 'a')?.project).toBe('/repos/api')
+  for (const key of [
+    '/tmp',
+    '/private/tmp/x',
+    '/private/var/folders/ab/T/y',
+    'C:\\Users\\t\\.claude\\spares\\spare-1',
+    '/home/t/.claude/roadmap',
+    '/home/t/.codex/.chatgpt-projects/g-p-1',
+    '/home/t/Documents/Codex/2026-10-27/some-task',
+  ])
+    expect(transientProject(key)).toBe(true)
+  for (const key of ['/repos/tmp', '/home/t/tmpl', '/home/t/Documents/Codex-notes', '/home/t/Projects/claude-tools']) expect(transientProject(key)).toBe(false)
+})
+
 test('the pane shows this chat\'s project, switches to another or All, and places a track', async ($, on) => {
   const off = { required: false }
   const plan = (at: number, track: string, project?: string) => ({ kind: 'plan', at, session: 's', track, title: track.toUpperCase(), project, phases: [{ name: 'P', steps: [{ id: '1', title: `${track} work`, review: off }] }] })
@@ -2111,10 +2150,29 @@ test('the pane shows this chat\'s project, switches to another or All, and place
   await ui.press({ key: 'proj-all' })
   expect(await ui.find({ text: /WEB/ })).toBeDefined()
   expect(await ui.find({ text: /API/ })).toBeDefined()
-  // Placing the unplaced track: the first press puts it in the first project.
+  // Placing the unplaced track: one button per project that holds tracks, each takes it there in one press.
   await ui.press({ key: 'tmenu-docs' })
-  await ui.press({ key: 'tplace-docs' })
+  expect(await ui.find({ key: 'tplace-docs-web' })).toBeDefined()
+  expect(await ui.find({ key: 'tplace-docs-none' })).toBe(undefined)
+  await ui.press({ key: 'tplace-docs-api' })
   expect([...files.values()].some(t => t.includes('"kind":"triage"') && t.includes('"project":"/repos/api"') && t.includes('"origin":"person"'))).toBe(true)
+  // Removing a project asks once, then each of its tracks goes to no project and the pane comes home.
+  expect(await ui.find({ key: 'proj-remove' })).toBe(undefined)
+  await ui.press({ key: 'proj-0' })
+  expect(await ui.find({ key: 'proj-remove' })).toBeDefined()
+  await ui.press({ key: 'proj-remove' })
+  expect(await ui.find({ key: 'proj-remove-yes' })).toBeDefined()
+  expect(await ui.find({ text: /Remove api\? Its 2 tracks go to no project\./ })).toBeDefined()
+  await ui.press({ key: 'proj-remove-yes' })
+  // Its tracks are written one by one, then the pane goes home: wait for that redraw.
+  for (let i = 0; i < 50 && (await ui.find({ key: 'proj-0' })); i++) await new Promise(r => setTimeout(r, 10))
+  const unplaced = [...files.values()].filter(t => t.includes('"kind":"triage"') && t.includes('"project":null'))
+  expect(unplaced.some(t => t.includes('"track":"api"'))).toBe(true)
+  expect(unplaced.some(t => t.includes('"track":"docs"'))).toBe(true)
+  // Only web is left: no row of projects, and the tracks in no project show beside web's.
+  expect(await ui.find({ key: 'proj-0' })).toBe(undefined)
+  expect(await ui.find({ text: /WEB/ })).toBeDefined()
+  expect(await ui.find({ text: /API/ })).toBeDefined()
   await ui.unmount()
   // The band speaks for this chat's project.
   const band = await $.ui.mount({
@@ -2124,7 +2182,8 @@ test('the pane shows this chat\'s project, switches to another or All, and place
     props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 5 } } as never,
   })
   expect(await band.find({ text: /web 0%/ })).toBeDefined()
-  expect(await band.find({ text: /api 0%/ })).toBe(undefined)
+  // api's project was removed, so it is in no project and shows here too.
+  expect(await band.find({ text: /api 0%/ })).toBeDefined()
   await band.unmount()
 })
 

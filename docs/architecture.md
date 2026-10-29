@@ -119,7 +119,8 @@ write. Nothing is written when an action refuses, and the refusal says why and w
 ## `register.tsx` — the Claude Code side
 
 - **Session start.** Reads the journal, detects the chat's project (the main repository's folder,
-  through git's common dir), registers the tools and `/roadmap`, notes a fingerprint of its own code,
+  through git's common dir; none in a folder `transientProject` names, and found again at each prompt
+  when the session's root has moved, as the app does from a spare folder), registers the tools and `/roadmap`, notes a fingerprint of its own code,
   and starts a 3-second tick: read new events, write the heartbeat, notice a code update, end finished
   agents, fold again when something changed.
 - **Journal I/O.** `emit` writes one event file; `sync` reads new ones and archive bundles (a bundle

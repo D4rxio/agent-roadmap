@@ -22,6 +22,7 @@ import {
   viewMarkdown,
   nextPersonId,
   trackMarkdown,
+  transientProject,
 } from './model'
 import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
@@ -59,7 +60,8 @@ const search = atom({ plugin: 'roadmap', key: 'search' } as const, '')
  * The project a folder belongs to: its main repository's folder, found through git's common dir so every
  * worktree of one repository is one project. Outside git, the folder itself.
  */
-async function detectProject($: EngineInterface, cwd: string): Promise<string> {
+async function detectProject($: EngineInterface, cwd: string): Promise<string | undefined> {
+  if (transientProject(cwd)) return undefined
   const git = await $.process
     .run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
     .catch(() => undefined)
@@ -67,7 +69,25 @@ async function detectProject($: EngineInterface, cwd: string): Promise<string> {
   const root = dir ? dir.replace(/[\\/]\.git[\\/]?$/, '') || dir : cwd
   // Without trailing separators, but never emptied: `/` stays `/`, `C:\\` stays `C:\\`.
   const key = root.replace(/[\\/]+$/, '')
-  return key && !/^[A-Za-z]:$/.test(key) ? key : root
+  const project = key && !/^[A-Za-z]:$/.test(key) ? key : root
+  return transientProject(project) ? undefined : project
+}
+
+/**
+ * The app can start a chat in a spare folder and move it to its own folder afterwards, and `/cd` moves it
+ * too: when the session's root is not the folder this chat's project came from, it is found again and a
+ * chat that already has a name says where it works now.
+ */
+async function followRoot($: EngineInterface) {
+  const root = await $.session.root().catch(() => undefined)
+  if (!root || root === journal.root) return
+  journal.root = root
+  const project = await detectProject($, root).catch(() => undefined)
+  if (project === journal.project) return
+  journal.project = project
+  if (journal.title) {
+    await emit($, { kind: 'session', at: Date.now(), session: journal.me, title: journal.title, actor: 'claude', project }).catch(() => undefined)
+  }
 }
 
 /**
@@ -196,6 +216,8 @@ const journal = {
   codexInstalled: false,
   /** The project this chat works in (its main repository's folder). */
   project: undefined as string | undefined,
+  /** The folder that project was found from. */
+  root: undefined as string | undefined,
   isOpened: false,
   /** Every event read, by its name (a loose file's name, or the name it had before it was archived). */
   seen: new Set<string>(),
@@ -488,6 +510,7 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
     here: journal.project,
     onProjectView: (p: string) => void update($, projectView, () => p).catch(() => undefined),
     onPlace: (track: string, p: string | null) => void personPlace($, track, p),
+    onRemoveProject: (p: string) => void personRemoveProject($, p),
     outdated: await readOutdated($),
     richButtons: journal.richButtons,
     view: (await read($, view)) as RoadmapView,
@@ -645,6 +668,20 @@ async function personPlace($: EngineInterface, track: string, project: string | 
 }
 
 /**
+ * The person removes a project: each of its tracks, put away ones too, goes to no project, so the project
+ * drops off the list; placing a track there again brings it back. The pane goes back to this chat's own.
+ */
+async function personRemoveProject($: EngineInterface, project: string) {
+  const b = await read($, board)
+  const name = b.projects.find(p => p.key === project)?.name ?? project
+  for (const t of b.tracks.filter(x => x.project === project)) {
+    await emit($, { kind: 'triage', at: Date.now(), session: journal.me, track: t.name, project: null, origin: 'person' })
+  }
+  await update($, projectView, () => '')
+  $.ui.toast(`⌂ ${name} removed — its tracks are in no project`)
+}
+
+/**
  * The person puts a track away or brings it back. `done` closes it as done whatever its steps say (true),
  * or takes that word back (false: abandoning, reopening); absent, the steps decide.
  */
@@ -749,7 +786,8 @@ export const register: Register = on => {
     journal.richButtons = !!engine && versionAtLeast(engine.base ?? engine.version, '2.1.295')
     const which = await $.process.run(['which', 'codex']).catch(() => undefined)
     journal.codexInstalled = which?.exitCode === 0 && !!which.stdout.trim()
-    journal.project = e.cwd ? await detectProject($, e.cwd).catch(() => e.cwd) : undefined
+    journal.root = e.cwd || undefined
+    journal.project = e.cwd ? await detectProject($, e.cwd).catch(() => (transientProject(e.cwd) ? undefined : e.cwd)) : undefined
     await update($, tzOffset, () => 0)
     void hostOffset($).then(min => update($, tzOffset, () => min)).catch(() => undefined)
     const band = await $.store.get('band').catch(() => undefined)
@@ -1036,6 +1074,7 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     journal.activeAt = Date.now()
+    await followRoot($)
     if (!journal.isOpened) {
       journal.isOpened = true
       // A sidebar where the app docks one (desktop); the terminal opens it on /roadmap.

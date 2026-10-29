@@ -77,7 +77,26 @@ export function refInText(
 const KIND_ORDER: string[] = ['session', 'plan', 'add', 'edit', 'agent', 'agent-end', 'step', 'triage', 'review']
 const STATUS_ORDER: string[] = ['todo', 'running', 'blocked', 'failed', 'skipped', 'moved', 'done']
 
-export function fold(events: RoadmapEvent[], lives: RoadmapLive[], now: number): RoadmapBoard {
+/**
+ * A folder that is no project: one an assistant keeps for itself (a spare folder a chat waits in before it
+ * gets its own, Codex's chat folders, the roadmap's), a chat's scratchpad or anything else under the system's
+ * temporary folders. A chat there still works on its track, but what it said about where counts as said
+ * nowhere. (A worktree is no project of its own either: it is found as its main repository.)
+ */
+export function transientProject(key: string): boolean {
+  return (
+    /[\\/]\.(?:claude|codex)(?:[\\/]|$)/.test(key) ||
+    /[\\/]Documents[\\/]Codex[\\/]\d{4}-\d{2}-\d{2}(?:[\\/]|$)/.test(key) ||
+    /^(?:\/private)?\/(?:tmp|var\/folders)(?:\/|$)/.test(key)
+  )
+}
+
+export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: number): RoadmapBoard {
+  // A project word naming a passing folder is dropped, a track placed there by hand included: the place it
+  // had before stands.
+  const passing = (p: unknown): p is string => typeof p === 'string' && transientProject(p)
+  const events = allEvents.map(e => ('project' in e && passing(e.project) ? ({ ...e, project: undefined } as RoadmapEvent) : e))
+  const lives = allLives.map(l => (passing(l.project) ? { ...l, project: undefined } : l))
   // Time first; events of the same millisecond in a fixed order — by kind (a plan before the work on
   // it, an agent's start before its end), step reports in the order work goes (running before done),
   // then by content — so the board never depends on the order files happened to be read in.

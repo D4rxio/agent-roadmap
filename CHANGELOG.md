@@ -6,6 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Odd projects: `spare-…`, scratchpads, `tmp`.** The app starts a chat in a spare folder and moves it to
+  its own afterwards; the chat kept the spare as its project, and so did the tracks it laid out. A folder
+  that is no project (spare folders, scratchpads, anything under the temporary folders, Codex's chat
+  folders) now never makes one, in what was written before too, and a chat whose folder moved says where
+  it works now at its next prompt.
+- **Moving a track to another project went round in a circle** through every folder ever seen, and the
+  track jumped groups under the pointer. Under ⋯ there is now one **⌂ <project>** per place it can go —
+  projects that hold tracks, this chat's own, and no project — each a single press.
+
+### Added
+- **✕ Remove** beside the project the pane shows: after asking once, each of its tracks goes to no project
+  and the project drops off the list.
+
 - **A pane that went blank, or froze with buttons that did nothing.** The engine refuses a drawing past
   100,000 characters serialized and keeps the last one it took, its buttons no longer answered — or its
   own "has not drawn" placeholder. A long track opened (a real one reached 123,000) or the Days tab across

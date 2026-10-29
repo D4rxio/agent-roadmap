@@ -41,6 +41,8 @@ export type PaneData = {
   onProjectView?: (project: string) => void
   /** The person places a track in a project, or in none (null). */
   onPlace?: (track: string, project: string | null) => void
+  /** The person removes a project: its tracks go to no project. */
+  onRemoveProject?: (project: string) => void
   view: RoadmapView
   expanded: string[]
   now: number
@@ -549,6 +551,7 @@ function header(els: Els, d: PaneData) {
   // Every project with tracks (archived ones count: Backlog shows them), and this chat's own. Shown when
   // there is a choice, or when the pane is away from this chat's project, so there is always a way back.
   const projects = (d.board.projects ?? []).filter(p => p.tracks > 0 || p.archived > 0 || p.key === d.here)
+  const removable = d.onRemoveProject ? projects.find(p => p.key === d.project && p.key !== d.here) : undefined
   const picker =
     d.onProjectView && (projects.length > 1 || (d.project !== undefined && d.project !== (d.here ?? '*'))) ? (
       <Box key="projects" flexDirection="row" gap={1} marginBottom={1}>
@@ -562,11 +565,22 @@ function header(els: Els, d: PaneData) {
             d.project === p.key ? <Text><Text bold>{`[${p.name}]`}</Text></Text> : <Text><Text dimColor>{` ${p.name} `}</Text></Text>,
           ),
         )}
+        {removable ? Btn(els, d, { key: 'proj-remove', plain: true, onPress: () => d.onStartEdit(`rmproj:${removable.key}`) }, '✕ Remove', <Text dimColor>✕ Remove</Text>) : null}
       </Box>
     ) : null
+  // Removing the project shown (never this chat's own) asks once: its tracks lose their place.
+  const asking = removable && d.editing === `rmproj:${removable.key}` ? removable : undefined
+  const confirm = asking ? (
+    <Box key="proj-confirm" flexDirection="row" flexWrap="wrap" columnGap={2} marginBottom={1}>
+      <Text>{`Remove ${asking.name}? Its ${asking.tracks + asking.archived} tracks go to no project.`}</Text>
+      {Btn(els, d, { key: 'proj-remove-yes', plain: true, onPress: () => { d.onRemoveProject?.(asking.key); d.onStartEdit('') } }, 'Remove', <Text color="error">Remove</Text>)}
+      {Btn(els, d, { key: 'proj-remove-no', plain: true, onPress: () => d.onStartEdit('') }, 'Cancel', <Text>Cancel</Text>)}
+    </Box>
+  ) : null
   return (
     <Box key="header-wrap" flexDirection="column">
     {picker}
+    {confirm}
     <Box key="header" flexDirection="row" gap={1} marginBottom={1}>
       <Text bold>Roadmap</Text>
       {tab('tracks', 'Tracks')}
@@ -1213,7 +1227,7 @@ function daysView(els: Els, d: PaneData) {
 
 /**
  * A track's actions, under its title once "⋯" is pressed. What closes or puts the track away closes the row;
- * moving it, its priority and its project are pressed in turn, so they keep the row open.
+ * moving it and its priority are pressed in turn, and its project is picked by name, so they keep the row open.
  */
 function trackMenu(els: Els, d: PaneData, t: RoadmapTrack, finished: boolean, siblings?: RoadmapTrack[]) {
   const { Box, Text } = els
@@ -1221,12 +1235,14 @@ function trackMenu(els: Els, d: PaneData, t: RoadmapTrack, finished: boolean, si
     act()
     d.onStartEdit('')
   }
-  const projects = d.board.projects ?? []
-  // Each press moves the track to the next project, then to none, then round again; the label names
-  // where the press takes it.
-  const keys: (string | null)[] = [...projects.map(p => p.key), null]
-  const next = keys[(keys.indexOf(t.project ?? null) + 1) % keys.length] ?? null
-  const place = `⌂ → ${next === null ? 'no project' : (projects.find(p => p.key === next)?.name ?? next)}`
+  // One button per place the track can go: projects that hold tracks, this chat's own, and none. Empty
+  // folders stay out of the way, and one press puts the track where its label says.
+  const places: { key: string | null; name: string }[] = [
+    ...(d.board.projects ?? [])
+      .filter(p => p.tracks > 0 || p.archived > 0 || p.key === d.here)
+      .map(p => ({ key: p.key as string | null, name: p.name })),
+    { key: null, name: 'no project' },
+  ].filter(p => p.key !== (t.project ?? null))
   const move = (dir: 'up' | 'down' | 'top', label: string) => {
     const rank = siblings && d.onTrackRank ? rankFor(siblings, t.name, dir) : undefined
     return rank === undefined
@@ -1258,8 +1274,16 @@ function trackMenu(els: Els, d: PaneData, t: RoadmapTrack, finished: boolean, si
           {t.priority ? <Text bold color={PRIO_COLOR[t.priority]}>{t.priority}</Text> : <Text dimColor>·</Text>}
         </Text>,
       )}
-      {d.onPlace && projects.length > 0
-        ? Btn(els, d, { key: `tplace-${t.name}`, plain: true, onPress: () => d.onPlace?.(t.name, next) }, place, <Text>{place}</Text>)
+      {d.onPlace && places.some(p => p.key !== null)
+        ? places.map(p =>
+            Btn(
+              els,
+              d,
+              { key: `tplace-${t.name}-${p.key === null ? 'none' : p.name}`, plain: true, onPress: () => d.onPlace?.(t.name, p.key) },
+              `⌂ ${p.name}`,
+              <Text>{`⌂ ${p.name}`}</Text>,
+            ),
+          )
         : null}
       {Btn(els, d, { key: `tcopy-${t.name}`, plain: true, onPress: (press: any) => { d.onCopyText(t.title, press?.surface ?? 'desktop'); d.onStartEdit('') } }, 'Copy title', <Text>Copy title</Text>)}
     </Box>

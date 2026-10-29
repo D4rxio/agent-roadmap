@@ -114,7 +114,10 @@ Any tool may read it, and append to it under the same rules, so other agents and
   as such (in every view, and in Markdown). A session's project is a timeline of what it said and when (its `session`
   events and live files): it works now where it said last, by time; an event, or an agent, belongs to the
   project its session was in at that moment, so a session that moves to another repository leaves its
-  past where it happened. A project key is never empty: `/` stays `/`.
+  past where it happened. A project key is never empty: `/` stays `/`. A folder that is no project — under
+  `.claude` or `.codex`, a Codex chat folder (`Documents/Codex/<date>/…`), anything under `/tmp`,
+  `/private/tmp` or `/var/folders` — is read as no `project` at all, wherever it is written (a person's
+  placement there included, so the place before it stands).
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.
