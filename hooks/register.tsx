@@ -24,7 +24,7 @@ import {
   trackMarkdown,
   transientProject,
 } from './model'
-import { checkMove, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
+import { addAction, checkMove, doneAction, editAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
 import { drawBand, drawChainsPane, drawPaneFit } from './view'
 import type { PaneData } from './view'
@@ -38,6 +38,8 @@ const TOOL_STATUS = 'mcp__roadmap__status'
 const TOOL_STEP = 'mcp__roadmap__step'
 const TOOL_DONE = 'mcp__roadmap__done'
 const TOOL_REVIEW = 'mcp__roadmap__review'
+const TOOL_ADD = 'mcp__roadmap__add'
+const TOOL_EDIT = 'mcp__roadmap__edit'
 const EMPTY: RoadmapBoard = { tracks: [], sessions: [], agents: [], projects: [], at: 0 }
 
 const board = atom({ plugin: 'roadmap', key: 'board' } as const, EMPTY)
@@ -951,6 +953,59 @@ export const register: Register = on => {
         required: ['step'],
       },
     })
+    const brief = {
+      why: { type: 'string', description: 'The problem this step solves, in a sentence.' },
+      scope: { type: 'string', description: 'Its boundaries: what is in, and what must not be touched.' },
+      done_when: { type: 'string', description: 'How to tell it is finished: concrete done criteria.' },
+      blocked_by: { type: 'array', items: { type: 'string' }, description: 'Step ids that must be done first ("1.2", or "<track>/<id>").' },
+    }
+    await $.tool.register({
+      name: 'add',
+      isDeferred: false,
+      description:
+        'Add one step to a roadmap track that exists, without re-laying the track: nothing else in it changes. ' +
+        'Use it to record a finding, a follow-up or a missing step; plan stays for laying a track out. `phase` is ' +
+        'one of the track\'s phases or a new one (absent: its last phase); `id` is generated when absent. The step ' +
+        'needs `review` unless the track has a default. A later plan that leaves it out keeps it. `backlog` sets it ' +
+        'aside for the person to schedule.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          track: { type: 'string' },
+          title: { type: 'string' },
+          phase: { type: 'string' },
+          id: { type: 'string', description: 'Short and unique in the track ("2.4"); generated when absent.' },
+          ...brief,
+          checkpoint: { type: 'boolean', description: 'Only the person can close it.' },
+          review: {
+            type: 'object',
+            description: 'How its work must be reviewed: { required, independence: any | other-session | cross-model, mode: standard | adversarial }.',
+            properties: {
+              required: { type: 'boolean' },
+              independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+              mode: { type: 'string', enum: ['standard', 'adversarial'] },
+            },
+            required: ['required'],
+          },
+          priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+          backlog: { type: 'boolean' },
+        },
+        required: ['track', 'title'],
+      },
+    })
+    await $.tool.register({
+      name: 'edit',
+      isDeferred: false,
+      description:
+        'Change one roadmap step\'s title or brief — why, scope, done_when, blocked_by — without re-laying its ' +
+        'track: give only what changes. An empty string clears a text, an empty blocked_by list clears what it ' +
+        'waits on. Status, review and priority are not changed here (mark, done and review are for those).',
+      inputSchema: {
+        type: 'object',
+        properties: { step: { type: 'string' }, title: { type: 'string' }, ...brief },
+        required: ['step'],
+      },
+    })
     await $.tool.register({
       name: 'step',
       isDeferred: false,
@@ -1068,7 +1123,7 @@ export const register: Register = on => {
       'requires a review only counts as done after one that meets it (cross-model: another model family reviews ' +
       'and records it with roadmap review). New steps you lay out need a review policy. Put "#<track>/<id>" in each Agent description for that step. Checkpoints ' +
       'are closed by the person, not by you. Open steps are listed most important first (P0 … P3); ' +
-      'backlog steps are set aside — do not work on them unless asked. New work → add a step with roadmap plan (read roadmap status first).'
+      'backlog steps are set aside — do not work on them unless asked. New work → roadmap add puts one step into a track that exists (roadmap edit corrects one step\'s brief); roadmap plan lays out a new track (read roadmap status first).'
     return { ...ran, blocks: [...ran.blocks, { name: 'roadmap', text }] }
   })
 
@@ -1132,6 +1187,8 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL_DONE }, ($, e) => act($, ctx => doneAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_STEP }, ($, e) => act($, ctx => stepAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_STATUS }, ($, e) => act($, ctx => statusAction(ctx, e as unknown as Record<string, unknown>)))
+  on('tool.call', { tool: TOOL_ADD }, ($, e) => act($, ctx => addAction(ctx, e as unknown as Record<string, unknown>)))
+  on('tool.call', { tool: TOOL_EDIT }, ($, e) => act($, ctx => editAction(ctx, e as unknown as Record<string, unknown>)))
   on('tool.call', { tool: TOOL_REVIEW }, ($, e) => act($, ctx => reviewAction(ctx, e as unknown as Record<string, unknown>)))
 
   // Live status: what this session and each of its agents is doing now.

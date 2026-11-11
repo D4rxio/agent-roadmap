@@ -5,7 +5,22 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`add` and `edit`** (tools and CLI): one step into a track that exists — phase, id (generated when
+  absent), why, scope, done when, blocked_by, checkpoint, review, priority, backlog — or a change to one
+  step's title or brief, and nothing else in the track changes. A duplicate id and a dependency loop are
+  refused; a later plan that leaves the step out keeps it. No more re-laying 24 steps to record a finding.
+- **✕ Remove** beside the project the pane shows: after asking once, each of its tracks goes to no project
+  and the project drops off the list.
+- **`/roadmap refresh`** reads the whole roadmap again from disk, folds it, asks every pane to draw anew
+  and opens a fresh Roadmap pane: for a pane left blank or stale, without reloading the plugin. `/roadmap`
+  and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
+
 ### Fixed
+- **A proposed move or skip waited unseen, and Done ✓ answered it wrongly.** A step awaiting the person in
+  a track set aside in the backlog no longer hides with its track: it shows in Needs you (marked "track in
+  backlog"), since it can hold up work elsewhere. A step's ⋯ now offers **Confirm move → <target>** or
+  **Confirm skip**, with the reason, and **Reject**, instead of Done ✓, which recorded a plain done.
 - **Odd projects: `spare-…`, scratchpads, `tmp`.** The app starts a chat in a spare folder and moves it to
   its own afterwards; the chat kept the spare as its project, and so did the tracks it laid out. A folder
   that is no project (spare folders, scratchpads, anything under the temporary folders, Codex's chat
@@ -14,11 +29,6 @@ versions follow [Semantic Versioning](https://semver.org/).
 - **Moving a track to another project went round in a circle** through every folder ever seen, and the
   track jumped groups under the pointer. Under ⋯ there is now one **⌂ <project>** per place it can go —
   projects that hold tracks, this chat's own, and no project — each a single press.
-
-### Added
-- **✕ Remove** beside the project the pane shows: after asking once, each of its tracks goes to no project
-  and the project drops off the list.
-
 - **A pane that went blank, or froze with buttons that did nothing.** The engine refuses a drawing past
   100,000 characters serialized and keeps the last one it took, its buttons no longer answered — or its
   own "has not drawn" placeholder. A long track opened (a real one reached 123,000) or the Days tab across
@@ -31,13 +41,6 @@ versions follow [Semantic Versioning](https://semver.org/).
 - **A step's actions moved under ⋯**, as a track's did: Done ✓, Copy, Pin, Skip, Backlog, Priority, ✎ and
   ✕ open in a row under the step. A priority shows on a step only once set. A long track now weighs a
   third less, so it fits whole more often.
-
-### Added
-- **`/roadmap refresh`** reads the whole roadmap again from disk, folds it, asks every pane to draw anew
-  and opens a fresh Roadmap pane: for a pane left blank or stale, without reloading the plugin. `/roadmap`
-  and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
-
-### Changed
 - **A failed review hands its findings to the person.** Agents were told to fix a failed review's findings
   and get it reviewed again; now the findings go to the person, who decides what is fixed — a failed review
   alone does not authorize fixes, more scope or changes to the track.

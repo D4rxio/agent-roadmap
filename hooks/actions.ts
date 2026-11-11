@@ -207,6 +207,115 @@ export function planAction(ctx: ActionContext, input: Record<string, unknown>): 
   }
 }
 
+/** `blocked_by` as tools and the CLI give it: a list, or one string of refs split by commas or spaces. */
+function refList(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined
+  const all = Array.isArray(raw) ? raw.map(String) : String(raw).split(/[\s,]+/)
+  return all.map(r => r.trim()).filter(r => r && r !== 'none')
+}
+
+/** A brief's text field: absent stays absent, an empty string clears it. */
+const field = (v: unknown): string | undefined => (typeof v === 'string' ? v.trim() : undefined)
+
+/** Why the board with `extra` applied cannot stand (a loop), and the refs it names that do not exist. */
+function checkLinks(ctx: ActionContext, extra: RoadmapEvent[], track: string, id: string): { loop?: string; note: string } {
+  const would = fold([...ctx.events, ...extra], [], ctx.now)
+  const loop = findCycle(would.tracks)
+  if (loop) return { loop: loop.join(' → '), note: '' }
+  const known = new Set(would.tracks.flatMap(t => t.steps.map(x => `${t.name}/${x.id}`)))
+  const step = would.tracks.find(t => t.name === track)?.steps.find(x => x.id === id)
+  const dangling = (step?.blockedBy ?? []).filter(r => !known.has(r))
+  return { note: dangling.length ? ` Note: blocked_by names steps that do not exist (yet): ${dangling.join(', ')}.` : '' }
+}
+
+/**
+ * One step into a track that exists, and nothing else in it changes: no re-laying the whole track to
+ * record one finding. A later plan that leaves the step out keeps it, as with the person's own items.
+ */
+export function addAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
+  const name = slug(String(input.track ?? ''))
+  const now = fold(ctx.events, [], ctx.now)
+  const t = now.tracks.find(x => x.name === name)
+  if (!t) return refused(`No track "${name}". add puts a step into a track that exists; lay out a new track with plan.`)
+  const title = text(input.title)
+  if (!title) return refused('A step needs a title.')
+  const given = text(input.id)
+  if (given && !/^[\w.-]+$/.test(given)) return refused(`A step id is letters, digits, ".", "-" or "_" (got "${given}").`)
+  if (given && t.steps.some(x => x.id === given)) return refused(`${name}/${given} exists already: pick another id, or change that step with edit.`)
+  const id = given ?? nextId(t, ctx.events, 'n')
+  const policy = readPolicy(input.review)
+  if (policy.error) return refused(`Not added: ${policy.error}.`)
+  if (!policy.policy && !t.review) {
+    return refused(
+      `Not added: ${name} has no default review policy, so the step needs its own \`review\`: ` +
+        '{ "required": true, "independence": "cross-model", "mode": "adversarial" } — independence is any, ' +
+        'other-session or cross-model. { "required": false } opts out on purpose.',
+    )
+  }
+  const priority =
+    input.priority === undefined || input.priority === 'none' ? undefined : PRIORITIES.includes(input.priority as RoadmapPriority) ? (input.priority as RoadmapPriority) : null
+  if (priority === null) return refused('priority is P0, P1, P2 or P3.')
+  const backlog = input.backlog === true || input.backlog === 'true' ? true : undefined
+  const phase = text(input.phase) ?? t.phases[t.phases.length - 1]?.name ?? FOLLOW_UPS
+  const added: RoadmapEvent = {
+    kind: 'add',
+    at: ctx.now,
+    session: ctx.session,
+    track: name,
+    id,
+    title,
+    phase,
+    checkpoint: input.checkpoint === true || input.checkpoint === 'true' ? true : undefined,
+    blockedBy: refList(input.blocked_by ?? input.blockedBy),
+    why: text(input.why),
+    scope: text(input.scope),
+    doneWhen: text(input.done_when ?? input.doneWhen),
+    review: policy.policy,
+    origin: 'agent',
+  }
+  const emit: RoadmapEvent[] = [added]
+  if (priority || backlog) emit.push({ kind: 'triage', at: ctx.now + 1, session: ctx.session, track: name, id, priority, backlog, origin: 'agent' })
+  const links = checkLinks(ctx, emit, name, id)
+  if (links.loop) return refused(`Not added: blocked_by closes a loop, so none of these could ever start: ${links.loop}.`)
+  const isNew = !t.phases.some(p => p.name === phase)
+  return {
+    ok: true,
+    text: `Added ${name}/${id} "${title}" to ${isNew ? 'a new phase' : 'phase'} "${phase}"${backlog ? ', in the backlog' : ''}.${links.note}`,
+    emit,
+    track: name,
+  }
+}
+
+/**
+ * Changes one step's title or brief — why, scope, done when, what it waits on — and nothing else: no
+ * re-laying the track to correct one line. Each field the latest word wins, a later plan's included.
+ */
+export function editAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
+  const now = fold(ctx.events, [], ctx.now)
+  const ref = parseRef(String(input.step ?? ''), now.tracks, ctx.track)
+  const step = ref && now.tracks.find(t => t.name === ref.track)?.steps.find(s => s.id === ref.id)
+  if (!ref || !step) return unknownStep(ctx, input.step)
+  const change = {
+    title: text(input.title),
+    why: field(input.why),
+    scope: field(input.scope),
+    doneWhen: field(input.done_when ?? input.doneWhen),
+    blockedBy: refList(input.blocked_by ?? input.blockedBy),
+  }
+  const named = (Object.keys(change) as (keyof typeof change)[]).filter(k => change[k] !== undefined)
+  if (!named.length) return refused('Give what changes: title, why, scope, done_when or blocked_by (an empty list, or "none", clears it).')
+  const edited: RoadmapEvent = { kind: 'edit', at: ctx.now, session: ctx.session, track: ref.track, id: ref.id, ...change, origin: 'agent' }
+  const links = checkLinks(ctx, [edited], ref.track, ref.id)
+  if (links.loop) return refused(`Not changed: blocked_by closes a loop, so none of these could ever start: ${links.loop}.`)
+  const label = { title: 'title', why: 'why', scope: 'scope', doneWhen: 'done when', blockedBy: 'waits on' }
+  return {
+    ok: true,
+    text: `${ref.track}/${ref.id}: changed ${named.map(k => label[k]).join(', ')}.${links.note}`,
+    emit: [edited],
+    track: ref.track,
+  }
+}
+
 /** Report a status, or propose a priority / backlog, for a step or (`<track>/*`) a whole track. */
 export function markAction(ctx: ActionContext, input: Record<string, unknown>): ActionResult {
   const status =

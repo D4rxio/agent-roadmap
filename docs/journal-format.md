@@ -121,9 +121,12 @@ Any tool may read it, and append to it under the same rules, so other agents and
 - Ids added at run time (the person's items, follow-ups) take a prefix and a short random part
   (`u7k2qx`, `fvyhmi`), so two writers never pick the same one.
 - A `plan` re-laid for a track replaces that track's layout; steps with the same id keep their status.
-- `add` and `edit` are laid over every plan: a step the person added survives a re-laid track (back into
-  "Your items" if the plan leaves it out) and keeps its "added by you" mark. The latest word on a title
-  wins, a plan's included; a removal holds until a later plan lays the step out again.
+- `add` and `edit` are laid over every plan: an added step (the person's, or an agent's `add`) survives a
+  re-laid track (back into its phase, or "Your items", if the plan leaves it out); the person's keeps its
+  "added by you" mark. An `add` may carry the brief a plan step has — `checkpoint`, `blockedBy`, `why`,
+  `scope`, `doneWhen`, `review` (a floor, as a plan's) — and an `edit` may change `title`, `why`, `scope`,
+  `doneWhen` and `blockedBy` (an empty string or list clears it). Per field the latest word wins, a
+  plan's included; a removal holds until a later plan lays the step out again.
 - `triage` is planning, not execution: `priority` is `P0` (most urgent) … `P3`, `null` clears it;
   `backlog: true` sets a step aside (or, with no `id`, a whole track): it keeps its status but leaves
   progress and the next-work list. Per field the person's latest word wins; an agent's applies only

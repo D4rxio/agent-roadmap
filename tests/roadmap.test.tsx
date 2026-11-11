@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkMove, codexReviewAction, doneAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
+import { addAction, checkMove, codexReviewAction, doneAction, editAction, markAction, planAction, reviewAction, statusAction, stepAction } from '../hooks/actions'
 import { inTime, versionAtLeast } from '../hooks/register'
 import { chainSvg, matches, whoseReview } from '../hooks/view'
 
@@ -3233,5 +3233,108 @@ test('the pane offers a proposed move for the person to confirm, then shows wher
   await ui.press({ key: 'ok-api-1' })
   expect(await ui.find({ text: /Confirm move/ })).toBe(undefined)
   expect([...files.values()].some(t => t.includes('"status":"moved"') && t.includes('"origin":"person"') && t.includes('"movedTo":"api/2"'))).toBe(true)
+  await ui.unmount()
+})
+
+test('add puts one step into a long track and nothing else changes; edit changes one step\'s brief', () => {
+  const off = { required: false }
+  const steps = Array.from({ length: 22 }, (_, i) => ({ id: `${i + 1}`, title: `Step ${i + 1}`, why: `w${i}`, scope: `s${i}`, doneWhen: `d${i}`, blockedBy: i ? [`${i}`] : undefined }))
+  const plan = { kind: 'plan', at: 1000, session: 's', track: 'big', review: off, phases: [{ name: 'One', steps: steps.slice(0, 11) }, { name: 'Two', steps: steps.slice(11) }] } as RoadmapEvent
+  const bare = { kind: 'plan', at: 1001, session: 's', track: 'bare', phases: [{ name: 'P', steps: [{ id: '1', title: 'x', review: off }] }] } as RoadmapEvent
+  const events = [plan, bare]
+  const ctx = { events, lives: [], now: 2000, session: 'c', actor: 'codex' }
+  const before = fold(events, [], 3000)
+  const r = addAction(ctx, { track: 'big', phase: 'One', id: '11b', title: 'Smoke first', why: 'G-1c needs it', scope: 'staging only', done_when: 'smoke green', blocked_by: ['11'], priority: 'P1' })
+  expect(r.ok).toBe(true)
+  expect(r.text).toContain('Added big/11b "Smoke first" to phase "One"')
+  const after = fold([...events, ...r.emit], [], 3000)
+  const big = after.tracks.find(t => t.name === 'big')!
+  // Only the new step differs (what is worked out from the graph, like what a step unblocks, aside).
+  const strip = (b: typeof before) =>
+    b.tracks
+      .find(t => t.name === 'big')!
+      .steps.filter(x => x.id !== '11b')
+      .map(x => JSON.stringify([x.id, x.title, x.phase, x.status, x.checkpoint, x.blockedBy, x.why, x.scope, x.doneWhen, x.review, x.priority, x.backlog]))
+  expect(strip(after)).toEqual(strip(before))
+  const added = big.steps.find(x => x.id === '11b')!
+  expect([added.phase, added.why, added.scope, added.doneWhen, added.blockedBy, added.priority]).toEqual(['One', 'G-1c needs it', 'staging only', 'smoke green', ['big/11'], 'P1'])
+  expect(big.phases.find(p => p.name === 'One')?.stepIds.at(-1)).toBe('11b')
+  // A later plan that leaves it out keeps it, brief and all.
+  const relaid = fold([...events, ...r.emit, { ...plan, at: 2500 } as RoadmapEvent], [], 3000).tracks.find(t => t.name === 'big')!.steps.find(x => x.id === '11b')
+  expect(relaid?.doneWhen).toBe('smoke green')
+  // Without a phase it goes to the last one; without an id one is made; a new phase is made on request.
+  const last = addAction(ctx, { track: 'big', title: 'Later', backlog: true })
+  expect(last.text).toMatch(/Added big\/n\w{5} "Later" to phase "Two", in the backlog\./)
+  expect(addAction(ctx, { track: 'big', title: 'New', phase: 'Three' }).text).toContain('to a new phase "Three"')
+  // Refused: a duplicate id, an unknown track, a loop, no review where the track has no default.
+  expect(addAction(ctx, { track: 'big', id: '3', title: 'Again' }).text).toContain('big/3 exists already')
+  expect(addAction(ctx, { track: 'nope', title: 'x' }).text).toContain('No track "nope"')
+  expect(addAction(ctx, { track: 'bare', title: 'x' }).text).toContain('needs its own `review`')
+  expect(addAction(ctx, { track: 'bare', title: 'x', review: { required: false } }).ok).toBe(true)
+  const withAdd = { ...ctx, events: [...events, ...r.emit] }
+  expect(editAction(withAdd, { step: 'big/11', blocked_by: ['11b'] }).text).toContain('closes a loop')
+
+  // edit: only what is given changes; an empty list clears what it waits on; a later plan has the last word.
+  const e = editAction(ctx, { step: 'big/12', done_when: 'after the smoke', blocked_by: 'none' })
+  expect(e.text).toBe('big/12: changed done when, waits on.')
+  const edited = fold([...events, ...e.emit], [], 3000).tracks.find(t => t.name === 'big')!.steps.find(x => x.id === '12')!
+  expect([edited.title, edited.why, edited.doneWhen, edited.blockedBy]).toEqual(['Step 12', 'w11', 'after the smoke', []])
+  expect(editAction(ctx, { step: 'big/12' }).ok).toBe(false)
+  const laterPlan = fold([...events, ...e.emit, { ...plan, at: 2500 } as RoadmapEvent], [], 3000).tracks.find(t => t.name === 'big')!.steps.find(x => x.id === '12')!
+  expect(laterPlan.doneWhen).toBe('d11')
+})
+
+test('a proposed move in a backlog track waits in Needs you; a step\'s ⋯ confirms or rejects a proposal, never as done', async ($, on) => {
+  const off = { required: false }
+  const events = [
+    { kind: 'plan', at: 1000, session: 's', track: 'upload', review: off, phases: [{ name: 'P', steps: [{ id: 'O-11', title: 'Orphans' }] }] },
+    { kind: 'plan', at: 1001, session: 's', track: 'fundament', review: off, phases: [{ name: 'P', steps: [{ id: 'S-1', title: 'Sweep' }] }] },
+    { kind: 'plan', at: 1002, session: 's', track: 'p2', review: off, phases: [{ name: 'P', steps: [{ id: 'SSW', title: 'Stage two', blockedBy: ['upload/O-11'] }, { id: 'X', title: 'Extra' }] }] },
+    { kind: 'triage', at: 1003, session: 's', track: 'upload', backlog: true, origin: 'person' },
+    { kind: 'step', at: 1100, session: 'c1', track: 'fundament', id: 'S-1', status: 'done', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1101, session: 'c1', track: 'upload', id: 'O-11', status: 'moved', movedTo: 'fundament/S-1', reason: 'merged in S-1', actor: 'claude', origin: 'agent' },
+    { kind: 'step', at: 1102, session: 'c1', track: 'p2', id: 'X', status: 'skipped', reason: 'not needed', actor: 'claude', origin: 'agent' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-backlog-move' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  const board = () => fold([...files].filter(([p]) => p.includes('/events/')).map(([, t]) => JSON.parse(t) as RoadmapEvent), [], 5000)
+  expect(board().tracks.find(t => t.name === 'p2')?.steps.find(x => x.id === 'SSW')?.status).toBe('blocked')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /track in backlog/ })).toBeDefined()
+  expect(await ui.find({ text: /proposes moving it to fundament\/S-1: merged in S-1/ })).toBeDefined()
+  // The step's own ⋯ answers the proposal as what it is.
+  await ui.press({ key: 'fold-p2' })
+  await ui.press({ key: 'smenu-p2/X' })
+  expect(await ui.find({ key: 'cskip-p2/X' })).toBeDefined()
+  expect(await ui.find({ text: /skip: not needed/ })).toBeDefined()
+  expect(await ui.find({ key: 'done-p2/X' })).toBe(undefined)
+  await ui.press({ key: 'creject-p2/X' })
+  expect([...files.values()].some(t => t.includes('"track":"p2"') && t.includes('"id":"X"') && t.includes('"status":"todo"') && t.includes('"origin":"person"'))).toBe(true)
+  // Confirming the move in Needs you: the dependent now waits on the step that carries it, done already.
+  await ui.press({ key: 'ok-upload-O-11' })
+  expect([...files.values()].some(t => t.includes('"status":"moved"') && t.includes('"origin":"person"') && t.includes('"movedTo":"fundament/S-1"'))).toBe(true)
+  expect(board().tracks.find(t => t.name === 'p2')?.steps.find(x => x.id === 'SSW')?.status).toBe('todo')
   await ui.unmount()
 })

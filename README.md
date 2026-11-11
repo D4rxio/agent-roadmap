@@ -127,7 +127,9 @@ or let it read and update one as it works. The pane opens on its own in the desk
   dependency on another project's step says which project it is in.
 - **This chat.** The step this chat holds, first thing in its pane; every pane marks which chat holds which step.
 - **Needs you.** Checkpoints, proposed skips and moves, and reviews to confirm, each waiting for
-  **Confirm / Reject**; failed steps; and steps left running with nobody on them (**◌ stale**).
+  **Confirm / Reject** — also in a track set aside in the backlog, since such a step can still hold up
+  work elsewhere; failed steps; and steps left running with nobody on them (**◌ stale**). A step's own
+  **⋯** offers the same: **Confirm move → <target>** or **Confirm skip**, with the reason, and **Reject**.
 - **Working now.** Live sessions and subagents and what each one is doing this moment.
 - **↻ Roadmap updated.** A chat keeps the plugin code it started with. When the plugin's files on disk
   change (a working copy, or a folder in `CLAUDE_CODE_PLUGIN_DIRS`), the pane and the band say so, with a
@@ -168,6 +170,8 @@ when Codex finished, so it never counts for work reported done after it, and it 
 | Tool | Purpose |
 |---|---|
 | `roadmap plan` | lay out or re-lay one track: phases, steps with `why` / `scope` / `done_when`, checkpoints, `blocked_by` (loops are refused) |
+| `roadmap add` | add one step to a track that exists, with its brief, dependencies and review policy; nothing else in the track changes |
+| `roadmap edit` | change one step's title or brief (why, scope, done when, what it waits on) without re-laying its track |
 | `roadmap step` | read one step's brief before working on it |
 | `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |

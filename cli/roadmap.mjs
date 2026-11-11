@@ -12,6 +12,12 @@
 //   roadmap mermaid [track] [--all] [--out file.md]
 //                                       what waits on what, as a Mermaid flowchart (GitHub/GitLab render it)
 //   roadmap plan <track> <file|->       lay out a track from JSON {title?, phases:[{name, steps:[…]}]}
+//   roadmap add <track> --title "…" [--phase …] [--id …] [--why …] [--scope …] [--done-when …]
+//               [--blocked-by a,b] [--checkpoint] [--review none|any|other-session|cross-model[:adversarial]|JSON]
+//               [--priority P0-P3] [--backlog]
+//                                       one step into a track that exists; nothing else in it changes
+//   roadmap edit <ref> [--title …] [--why …] [--scope …] [--done-when …] [--blocked-by a,b|none]
+//                                       change one step's title or brief ("" clears a text)
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
 //                                       status: todo running done failed blocked skipped moved
 //                                       (skipped needs --reason; moved needs --to and --reason: the obligation
@@ -267,6 +273,16 @@ function followUps(flags) {
   })
 }
 
+/** `--review`: "none" opts out, an independence (with ":adversarial") requires one, or the JSON a plan takes. */
+function reviewFlag(raw) {
+  if (raw === undefined) return undefined
+  const v = String(raw).trim()
+  if (v.startsWith('{')) return parse(v) ?? fail(`--review is not JSON: ${v}`)
+  if (v === 'none') return { required: false }
+  const [independence, mode] = v.split(':')
+  return { required: true, independence, mode }
+}
+
 switch (command) {
   case 'status':
     act(ctx => actions.statusAction(ctx, { all: yes(flags.all) }), 'roadmap status')
@@ -312,6 +328,40 @@ switch (command) {
     act(ctx => actions.planAction(ctx, { ...input, track: args[0] }), `roadmap plan ${args[0]}`)
     break
   }
+  case 'add':
+    act(
+      ctx =>
+        actions.addAction(ctx, {
+          track: args[0],
+          title: flags.title,
+          phase: flags.phase,
+          id: flags.id,
+          why: flags.why,
+          scope: flags.scope,
+          done_when: flags['done-when'],
+          blocked_by: flags['blocked-by'],
+          checkpoint: yes(flags.checkpoint),
+          review: reviewFlag(flags.review),
+          priority: flags.priority,
+          backlog: yes(flags.backlog),
+        }),
+      `roadmap add ${args[0] ?? ''}`,
+    )
+    break
+  case 'edit':
+    act(
+      ctx =>
+        actions.editAction(ctx, {
+          step: args[0],
+          title: flags.title,
+          why: flags.why,
+          scope: flags.scope,
+          done_when: flags['done-when'],
+          blocked_by: flags['blocked-by'],
+        }),
+      `roadmap edit ${args[0] ?? ''}`,
+    )
+    break
   case 'mark':
     act(
       ctx =>

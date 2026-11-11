@@ -96,7 +96,10 @@ export type RoadmapEvent =
       step?: string
     }
   | { kind: 'agent-end'; at: number; session: string; agentId: string; status: RoadmapStatus }
-  /** A step the person added from the pane: laid over every plan, so a re-laid track keeps it. */
+  /**
+   * One step added to a track that exists — by the person from the pane, or by an agent (`add`, a
+   * follow-up) — with as much of its brief as a plan gives. Laid over every plan, so a re-laid track keeps it.
+   */
   | {
       kind: 'add'
       at: number
@@ -105,9 +108,19 @@ export type RoadmapEvent =
       id: string
       title: string
       phase?: string
+      checkpoint?: boolean
+      /** Step ids (same track) or `<track>/<id>` that must be done first. */
+      blockedBy?: string[]
+      why?: string
+      scope?: string
+      doneWhen?: string
+      review?: RoadmapReviewPolicy
       origin?: RoadmapOrigin
     }
-  /** A rename or removal of a step; the latest word on a title wins, a plan's included. */
+  /**
+   * A change to one step: its title or brief (each field the latest word wins, a plan's included; an
+   * empty `blockedBy` clears it), or its removal.
+   */
   | {
       kind: 'edit'
       at: number
@@ -115,6 +128,10 @@ export type RoadmapEvent =
       track: string
       id: string
       title?: string
+      why?: string
+      scope?: string
+      doneWhen?: string
+      blockedBy?: string[]
       removed?: boolean
       origin?: RoadmapOrigin
     }

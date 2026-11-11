@@ -228,6 +228,11 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
         session: e.session,
       })
       if (s && origin !== 'person') s.track = e.track
+    } else if (e.kind === 'add' && e.review) {
+      // An added step's review policy is a floor too: a later plan can raise it, never lower it.
+      const k = key(e.track, e.id)
+      const floor = stricter(policyOf(e.review), floors.get(k))
+      if (floor) floors.set(k, floor)
     } else if (e.kind === 'session') {
       const s = sessions.get(e.session)
       if (s) {
@@ -636,11 +641,14 @@ export function attention(board: RoadmapBoard): {
   brokenMoves: RoadmapStep[]
 } {
   const all = board.tracks.filter(t => !t.backlog && !t.archived).flatMap(t => t.steps)
+  // What waits for the person's word waits whatever the track: a step in a set-aside track can still hold
+  // up work elsewhere (its dependents), so it is never hidden with the rest of its track.
+  const open = board.tracks.filter(t => !t.archived).flatMap(t => t.steps)
   return {
     // A move whose chain ends nowhere (two moves confirmed at once into a loop, or a target gone): its
     // dependents stay blocked until the person undoes one.
-    brokenMoves: all.filter(s => s.status === 'moved' && !s.movedFinal),
-    awaiting: all.filter(s => s.status === 'awaiting'),
+    brokenMoves: open.filter(s => s.status === 'moved' && !s.movedFinal),
+    awaiting: open.filter(s => s.status === 'awaiting'),
     blocked: all.filter(s => s.status === 'blocked' && !s.backlog),
     failed: all.filter(s => s.status === 'failed' && !s.backlog),
     stale: all.filter(s => s.stale && !s.backlog),
@@ -656,6 +664,13 @@ export const YOUR_PHASE = 'Your items'
  * plan lays the step out again.
  */
 function layOverPersonEdits(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEvent[]) {
+  // The brief an add or edit gives, field by field; `blockedBy` as a plan writes it (`<track>/<id>`).
+  const brief = (step: RoadmapStep, e: Extract<RoadmapEvent, { kind: 'add' | 'edit' }>) => {
+    if (e.why !== undefined) step.why = e.why || undefined
+    if (e.scope !== undefined) step.scope = e.scope || undefined
+    if (e.doneWhen !== undefined) step.doneWhen = e.doneWhen || undefined
+    if (e.blockedBy !== undefined) step.blockedBy = e.blockedBy.map(r => (r.includes('/') ? r.replace(/^#/, '') : `${e.track}/${r}`))
+  }
   const titledAt = new Map<string, number>()
   for (const t of tracks.values()) for (const s of t.steps) titledAt.set(`${t.name}/${s.id}`, t.updatedAt)
   for (const e of sorted) {
@@ -669,6 +684,8 @@ function layOverPersonEdits(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEv
         if (e.origin === 'person') step.addedBy = 'you'
         if (e.at > (titledAt.get(k) ?? 0)) {
           step.title = e.title
+          if (e.checkpoint !== undefined) step.checkpoint = e.checkpoint
+          brief(step, e)
           titledAt.set(k, e.at)
         }
         continue
@@ -686,17 +703,20 @@ function layOverPersonEdits(tracks: Map<string, RoadmapTrack>, sorted: RoadmapEv
         title: e.title,
         phase: phaseName,
         status: 'todo',
-        checkpoint: false,
+        checkpoint: e.checkpoint === true,
         blockedBy: [],
         agents: [],
         backlog: false,
         reviews: [],
+        review: e.review,
         addedBy: e.origin === 'person' ? 'you' : undefined,
       })
+      brief(t.steps[t.steps.length - 1]!, e)
       titledAt.set(k, e.at)
       continue
     }
     if (!step || e.at <= (titledAt.get(k) ?? 0)) continue
+    brief(step, e)
     if (e.removed) {
       t.steps = t.steps.filter(s => s.id !== e.id)
       for (const p of t.phases) p.stepIds = p.stepIds.filter(id => id !== e.id)

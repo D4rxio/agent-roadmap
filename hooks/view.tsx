@@ -616,6 +616,12 @@ function copyStep(els: Els, d: PaneData, st: { track: string; id: string; title:
   )
 }
 
+/** "(in backlog)" after a step that waits for the person although it, or its track, is set aside. */
+function shelvedNote(d: PaneData, st: RoadmapStep): { text: string; dim: true }[] {
+  const t = d.board.tracks.find(x => x.name === st.track)
+  return t?.backlog ? [{ text: ' · track in backlog', dim: true }] : st.backlog ? [{ text: ' · in backlog', dim: true }] : []
+}
+
 function needsYou(els: Els, d: PaneData) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
@@ -636,6 +642,7 @@ function needsYou(els: Els, d: PaneData) {
             { text: '↪ ', color: 'warning' },
             { text: `${st.track}/${st.id} `, bold: true },
             { text: st.title, main: true },
+            ...shelvedNote(d, st),
           ])}
           <Text dimColor wrap="truncate-end">{`   moved to ${st.movedTo ?? '?'}, but the moves end nowhere (a loop, or a step gone) — its dependents stay blocked`}</Text>
           <Box flexDirection="row" gap={1}>
@@ -673,6 +680,7 @@ function needsYou(els: Els, d: PaneData) {
             { text: '◆ ', color: 'permission' },
             { text: `${st.track}/${st.id} `, bold: true },
             { text: st.title, main: true },
+            ...shelvedNote(d, st),
           ])}
           {st.reviewPending ? (
             <Text dimColor wrap="truncate-end">{`   waits for ${whoseReview(st)}${st.review?.independence === 'cross-model' ? ` — a model other than ${family(st.implementer?.actor)} must review it` : ''}${st.reviewState === 'failed' ? `; the last one failed${roundOf(st, st.reviews[st.reviews.length - 1])}` : ''}`}</Text>
@@ -1103,9 +1111,39 @@ function stepMenu(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
     d.onStartEdit('')
   }
   const open = s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved'
+  // A proposed move or skip is confirmed as what it is, never as a plain "done": its target and reason
+  // stand beside the two answers.
+  const proposal = s.status === 'awaiting' && (s.proposed === 'moved' || s.proposed === 'skipped') ? s.proposed : undefined
+  const confirm =
+    proposal === 'moved'
+      ? s.moveProblem
+        ? null
+        : Btn(
+            els,
+            d,
+            { key: `cmove-${ref}`, plain: true, onPress: then(() => d.onMove(t.name, s.id, s.movedTo ?? '', s.moveReason ?? '')) },
+            `Confirm move → ${s.movedTo ?? '?'}`,
+            <Text><Text color="permission">{`Confirm move → ${s.movedTo ?? '?'}`}</Text></Text>,
+          )
+      : proposal === 'skipped'
+        ? Btn(els, d, { key: `cskip-${ref}`, plain: true, onPress: then(() => d.onSkip(t.name, s.id, s.skipReason ?? '')) }, 'Confirm skip', <Text><Text color="permission">Confirm skip</Text></Text>)
+        : null
   return (
     <Box key={`smenu-row-${ref}`} flexDirection="row" flexWrap="wrap" columnGap={2} marginLeft={4}>
-      {open
+      {proposal ? (
+        <Text key={`sprop-${ref}`} dimColor wrap="truncate-end">
+          {proposal === 'moved'
+            ? s.moveProblem
+              ? `move to ${s.movedTo ?? '?'}: ${s.moveProblem}`
+              : `move to ${s.movedTo ?? '?'}: ${s.moveReason ?? 'no reason given'}`
+            : `skip: ${s.skipReason ?? 'no reason given'}`}
+        </Text>
+      ) : null}
+      {confirm}
+      {proposal
+        ? Btn(els, d, { key: `creject-${ref}`, plain: true, onPress: then(() => d.onDecide(t.name, s.id, 'todo')) }, 'Reject', <Text>Reject</Text>)
+        : null}
+      {open && !proposal
         ? // The person's own word: it also closes a checkpoint or a step awaiting confirmation.
           Btn(els, d, { key: `done-${ref}`, plain: true, onPress: then(() => d.onCycle(t.name, s.id, 'done')) }, 'Done ✓', <Text><Text color="success">Done ✓</Text></Text>)
         : null}
