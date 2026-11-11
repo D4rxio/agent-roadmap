@@ -67,6 +67,14 @@ export type RoadmapEvent =
        * counts as a cross-model review).
        */
       via?: string
+      /** What the reviewer says it did — declared, never verified: the kind of review it ran, … */
+      mode?: 'standard' | 'adversarial'
+      /** … whether it came fresh, without the implementation's context (a fork carries that context), … */
+      fresh?: boolean
+      /** … and whether it ran tests or mutations rather than only reading the code. */
+      ranTests?: boolean
+      /** How many follow-up steps this review filed (its findings set aside for the person). */
+      followUps?: number
     }
   | {
       kind: 'step'
@@ -132,6 +140,13 @@ export type RoadmapEvent =
       scope?: string
       doneWhen?: string
       blockedBy?: string[]
+      /**
+       * The step's review policy. An agent's may only raise it (a floor, as a plan's); the person's sets it
+       * as said — lowering included — and stands until the person's next word.
+       */
+      review?: RoadmapReviewPolicy
+      /** Why the policy changed: the person gives one when lowering it. */
+      reason?: string
       removed?: boolean
       origin?: RoadmapOrigin
     }
@@ -230,6 +245,17 @@ export type RoadmapStep = {
    * `satisfied`: no agent on this machine can prove which model wrote a review, so the person confirms.
    */
   passedReview?: RoadmapReview
+  /** `you` when the policy in force is the person's own word (set in the pane), which agents cannot change. */
+  reviewSetBy?: 'you'
+  /**
+   * The person lowered the policy below what the plan and agents asked for: what it would be, what it is,
+   * when and why. Shown for as long as the lower policy is in force, a closed step included.
+   */
+  lowered?: { from: RoadmapReviewPolicy; to: RoadmapReviewPolicy; at: number; reason?: string }
+  /** Every change of the step's policy by an edit, oldest first: who, when, to what, why. */
+  policyLog?: { at: number; by: string; to: RoadmapReviewPolicy; reason?: string; person: boolean }[]
+  /** The review that let it pass was `findings`: its fixes have not been reviewed again. */
+  findingsOpen?: boolean
   /** Awaiting because the review its policy requires is still missing (not because of a checkpoint). */
   reviewPending?: boolean
   /** When a worker last reported it done, if no running has reopened it since: the work a review reviews. */
@@ -279,7 +305,19 @@ export type RoadmapTrack = {
   projectBy?: 'you' | 'plan' | 'inferred'
 }
 
-export type RoadmapReview = { actor: string; session: string; verdict: 'pass' | 'findings' | 'fail'; at: number; evidence?: string; note?: string; via?: string }
+export type RoadmapReview = {
+  actor: string
+  session: string
+  verdict: 'pass' | 'findings' | 'fail'
+  at: number
+  evidence?: string
+  note?: string
+  via?: string
+  mode?: 'standard' | 'adversarial'
+  fresh?: boolean
+  ranTests?: boolean
+  followUps?: number
+}
 
 export type RoadmapSession = {
   id: string

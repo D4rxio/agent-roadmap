@@ -17,13 +17,17 @@
 //               [--priority P0-P3] [--backlog]
 //                                       one step into a track that exists; nothing else in it changes
 //   roadmap edit <ref> [--title …] [--why …] [--scope …] [--done-when …] [--blocked-by a,b|none]
-//                                       change one step's title or brief ("" clears a text)
+//               [--review any|other-session|cross-model[:adversarial]|JSON]
+//                                       change one step's title or brief ("" clears a text); --review only
+//                                       raises its policy (lowering is the person's, in the Roadmap pane)
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
 //                                       status: todo running done failed blocked skipped moved
 //                                       (skipped needs --reason; moved needs --to and --reason: the obligation
 //                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…
 //   roadmap review <ref> --verdict pass|findings|fail [--evidence …] [--note …] [--follow-up "title[:P1]"]…
+//               [--mode standard|adversarial] [--fresh true|false] [--ran-tests true|false]
+//                                       what you did, shown beside the verdict (declared, not checked)
 //   roadmap review <ref> --from-codex <session id | result.json | rollout.jsonl> [--follow-ups]
 //                                       carry over a Codex review that could not write the roadmap itself
 //                                       (claudex-loop's read-only sandbox): the verdict comes from Codex's own
@@ -358,6 +362,7 @@ switch (command) {
           scope: flags.scope,
           done_when: flags['done-when'],
           blocked_by: flags['blocked-by'],
+          review: reviewFlag(flags.review),
         }),
       `roadmap edit ${args[0] ?? ''}`,
     )
@@ -406,6 +411,9 @@ switch (command) {
           evidence: flags.evidence,
           note: flags.note,
           start: yes(flags.start),
+          mode: flags.mode,
+          fresh: flags.fresh,
+          ran_tests: flags['ran-tests'],
           follow_ups: followUps(flags),
         }),
       `roadmap review ${args[0] ?? ''}`,

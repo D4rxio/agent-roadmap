@@ -26,8 +26,15 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
   [--backlog]` puts one step in (the id is generated unless `--id`); nothing else in the track changes, and
   a later plan that leaves it out keeps it. `$R edit <track>/<id> --done-when "…" --blocked-by a,b` changes
   only what you give (title, why, scope, done when, what it waits on; `--blocked-by none` clears it).
+  `--review other-session:adversarial` may raise a step's review policy; only the person lowers one, in
+  the pane — ask them, with your reason.
+- **Done comes before review**: on a step that needs a review, report `$R done` as soon as the work is
+  ready for review — before any push or merge — saying it waits for review. A reviewer cannot record a
+  pass of work nobody reported done.
 - **Reviewing**: when asked to review a step (often another model's work), check it against the step's
-  brief, then record the verdict yourself: `$R review <track>/<id> --verdict pass|findings|fail --evidence "what you checked"`.
+  brief, then record the verdict yourself: `$R review <track>/<id> --verdict pass|findings|fail --evidence "what you checked"`,
+  with what you did: `--mode adversarial|standard --fresh true|false --ran-tests true|false` (shown beside
+  your verdict, so a weaker review shows as one).
   **Never `mark … running` to review**: running means you work on the implementation — it would reopen
   the work and drop the report you came to review (the CLI refuses it without `--reopen`). To show you
   are on it, `$R review <track>/<id> --start` (writes nothing). Record **every round**, a `fail` included,

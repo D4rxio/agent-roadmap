@@ -17,8 +17,11 @@ import {
   family,
   fold,
   nextId,
+  policyShort,
   policyText,
   qualifies,
+  stricter,
+  declaredShort,
   parseRef,
   slug,
   summary,
@@ -62,6 +65,9 @@ export type ActionResult = {
 const refused = (text: string): ActionResult => ({ ok: false, text, emit: [] })
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+
+/** A yes/no from a tool (a boolean) or the CLI (the word), else undefined. */
+const flag = (v: unknown): boolean | undefined => (v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined)
 
 function unknownStep(ctx: ActionContext, step: unknown): ActionResult {
   return refused(`No step "${String(step)}". Known:\n${summary(fold(ctx.events, [], ctx.now), { open: 50 })}`)
@@ -302,12 +308,28 @@ export function editAction(ctx: ActionContext, input: Record<string, unknown>): 
     doneWhen: field(input.done_when ?? input.doneWhen),
     blockedBy: refList(input.blocked_by ?? input.blockedBy),
   }
-  const named = (Object.keys(change) as (keyof typeof change)[]).filter(k => change[k] !== undefined)
-  if (!named.length) return refused('Give what changes: title, why, scope, done_when or blocked_by (an empty list, or "none", clears it).')
-  const edited: RoadmapEvent = { kind: 'edit', at: ctx.now, session: ctx.session, track: ref.track, id: ref.id, ...change, origin: 'agent' }
+  // An agent may raise a step's review policy, never lower it: lowering is the person's call, in the pane,
+  // where it is recorded and shown as such. A policy the person set is theirs alone.
+  const { policy, error } = readPolicy(input.review)
+  if (error) return refused(error)
+  if (policy) {
+    if (step.reviewSetBy === 'you') {
+      return refused(`${ref.track}/${ref.id}'s review policy (${policyShort(step.review)}) was set by the person: only they change it, in the Roadmap pane (⋯ → Review). Ask them, with your reason.`)
+    }
+    const raised = stricter(policy, step.review)
+    if (JSON.stringify(raised) !== JSON.stringify(policy)) {
+      return refused(
+        `Not changed: that would lower ${ref.track}/${ref.id}'s review (${policyShort(step.review)} → ${policyShort(policy)}). Only the person lowers a review policy, in the Roadmap pane (⋯ → Review), where it is recorded as lowered. Ask them, with your reason; you may only raise it here.`,
+      )
+    }
+  }
+  const all = { ...change, review: policy }
+  const named = (Object.keys(all) as (keyof typeof all)[]).filter(k => all[k] !== undefined)
+  if (!named.length) return refused('Give what changes: title, why, scope, done_when, blocked_by (an empty list, or "none", clears it) or review (raise only).')
+  const edited: RoadmapEvent = { kind: 'edit', at: ctx.now, session: ctx.session, track: ref.track, id: ref.id, ...all, origin: 'agent' }
   const links = checkLinks(ctx, [edited], ref.track, ref.id)
   if (links.loop) return refused(`Not changed: blocked_by closes a loop, so none of these could ever start: ${links.loop}.`)
-  const label = { title: 'title', why: 'why', scope: 'scope', doneWhen: 'done when', blockedBy: 'waits on' }
+  const label = { title: 'title', why: 'why', scope: 'scope', doneWhen: 'done when', blockedBy: 'waits on', review: `review (${policyShort(after(ctx, [edited], ref.track, ref.id)?.review)})` }
   return {
     ok: true,
     text: `${ref.track}/${ref.id}: changed ${named.map(k => label[k]).join(', ')}.${links.note}`,
@@ -517,11 +539,11 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
   if (unreported && verdict !== 'fail') {
     return refused(
       step.reportedAt === undefined
-        ? `${ref.track}/${ref.id} has no work reported done, so a ${verdict} cannot count: report it done first (roadmap done), then review that. A fail is recorded at any time, as a round of its history.`
+        ? `${ref.track}/${ref.id} has no work reported done, so a ${verdict} cannot count yet. Its implementer reports the work first — roadmap done ${ref.track}/${ref.id}, saying it waits for review; that comes before any push or merge — and then you review that. Ask the implementing chat (or the person) for it. A fail is recorded at any time, as a round of its history.`
         : `This ${verdict} is from before ${ref.track}/${ref.id} was last reported done, so it reviewed earlier work and cannot count for this one: review the work as reported now. A fail is recorded at any time, as a round of its history.`,
     )
   }
-  const ev: RoadmapEvent = {
+  const ev: Extract<RoadmapEvent, { kind: 'review' }> = {
     kind: 'review',
     at: ctx.now,
     session: ctx.session,
@@ -532,12 +554,19 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
     evidence: text(input.evidence),
     note: text(input.note),
     via: ctx.via,
+    // What the reviewer says it did: kept beside the verdict so a weaker review shows as one. Never checked.
+    mode: input.mode === 'adversarial' || input.mode === 'standard' ? input.mode : undefined,
+    fresh: flag(input.fresh),
+    ranTests: flag(input.ran_tests ?? input.ranTests),
   }
   const ref2 = `${ref.track}/${ref.id}`
   // A reviewer's findings to follow up become follow-up steps, as a worker's do with done.
   const emit: RoadmapEvent[] = [ev]
   const ups = addFollowUps(ctx, emit, ref.track, input.follow_ups)
+  const filed = emit.filter(x => x.kind === 'add').length
+  if (filed) ev.followUps = filed
   const s = after(ctx, emit, ref.track, ref.id)
+  const short = declaredShort(step.review, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now, mode: ev.mode })
   const counts = step.review?.required
     ? qualifies(step.review, step.implementer, { actor: ctx.actor, session: ctx.session, verdict, at: ctx.now, via: ctx.via })
     : true
@@ -558,7 +587,7 @@ export function reviewAction(ctx: ActionContext, input: Record<string, unknown>)
     ok: true,
     text: unreported
       ? `Review of ${ref2} recorded as a round of its history: fail, on work not reported done${step.reportedAt === undefined ? '' : ' since'}. It closes and reopens nothing; the step is ${state}.${ups}`
-      : `Review of ${ref2} recorded: ${verdict}.${why} The step is ${state}.${ups}`,
+      : `Review of ${ref2} recorded: ${verdict}.${why}${short ? ` Note: its policy asks for an adversarial review and this one is ${short.startsWith('declared') ? 'declared standard' : 'not declared adversarial'} (pass mode: "adversarial" if it was); the person sees that beside the verdict.` : ''} The step is ${state}.${ups}`,
     emit,
     track: ref.track,
     toast: counts ? `⚖ ${ref2} reviewed: ${verdict}` : undefined,

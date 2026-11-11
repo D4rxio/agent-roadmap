@@ -6,6 +6,7 @@ import type {
   RoadmapEvent,
   RoadmapPriority,
   RoadmapLive,
+  RoadmapReviewPolicy,
   RoadmapStatus,
 } from '../types'
 import {
@@ -23,6 +24,7 @@ import {
   nextPersonId,
   trackMarkdown,
   transientProject,
+  policyShort,
 } from './model'
 import { addAction, checkMove, doneAction, editAction, markAction, planAction, reviewAction, statusAction, stepAction } from './actions'
 import type { ActionContext, ActionResult } from './actions'
@@ -558,6 +560,7 @@ async function paneData($: EngineInterface, e: any): Promise<PaneData> {
     onStartEdit: ref => void update($, editing, () => ref).catch(() => undefined),
     onRename: (track, id, title) => void personEdit($, track, id, { title }),
     onRemove: (track, id) => void personEdit($, track, id, { removed: true }),
+    onReviewPolicy: (track, id, policy, reason) => void personReview($, track, id, policy, reason),
     onPriority: (track, id, priority) => void personTriage($, track, id, { priority }),
     onBacklog: (track, id, backlog) => void personTriage($, track, id, { backlog }),
     onTrackPriority: (track, priority) => void personTrackTriage($, track, { priority }),
@@ -649,6 +652,15 @@ async function personAdd($: EngineInterface, track: string, title: string) {
 
 async function personEdit($: EngineInterface, track: string, id: string, change: { title?: string; removed?: boolean }) {
   await emit($, { kind: 'edit', at: Date.now(), session: journal.me, track, id, ...change, origin: 'person' })
+}
+
+/**
+ * The person sets one step's review policy: raised or lowered, as said. A lowering is recorded with its
+ * reason and stays visible on the step; no agent can change it back.
+ */
+async function personReview($: EngineInterface, track: string, id: string, policy: RoadmapReviewPolicy, reason: string) {
+  await emit($, { kind: 'edit', at: Date.now(), session: journal.me, track, id, review: policy, reason: reason.trim() || undefined, origin: 'person' })
+  $.ui.toast(`⚖ ${track}/${id}: review ${policyShort(policy)}`)
 }
 
 async function personTriage($: EngineInterface, track: string, id: string, change: { priority?: RoadmapPriority | null; backlog?: boolean }) {
@@ -892,7 +904,8 @@ export const register: Register = on => {
         'A Codex review that ran read-only and could not write the roadmap (claudex-loop reviews that way) is not yours to record here: ' +
         'carry it over after each round with `node ~/.claude/mods/roadmap/cli/roadmap.mjs review <track>/<id> --from-codex <the round\'s result.json>`, ' +
         'which reads the verdict from Codex\'s own session log and records it as Codex. A fail is recorded at any time, as a round of the ' +
-        'step\'s history; a pass only counts for work reported done before it, so report the work done before the round meant to close it.',
+        'step\'s history; a pass only counts for work reported done before it: the implementer reports done (before any push), then the review. ' +
+        'Say what you did with mode, fresh and ran_tests: they are shown beside your verdict (declared, not checked), so a weaker review shows as one.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -901,6 +914,9 @@ export const register: Register = on => {
           evidence: { type: 'string', description: 'What the review checked and found.' },
           note: { type: 'string' },
           start: { type: 'boolean', description: 'Only say you are reviewing it now (no verdict yet): the step stays as reported.' },
+          mode: { type: 'string', enum: ['standard', 'adversarial'], description: 'The kind of review you ran: adversarial = you set out to break it.' },
+          fresh: { type: 'boolean', description: 'You came to it fresh, without the implementation\'s context (a fork of the implementing chat is not fresh).' },
+          ran_tests: { type: 'boolean', description: 'You ran tests or mutations, not only read the code.' },
           follow_ups: {
             type: 'array',
             description: 'Findings to follow up: each becomes a follow-up step, set aside in the backlog for the person.',
@@ -999,10 +1015,25 @@ export const register: Register = on => {
       description:
         'Change one roadmap step\'s title or brief — why, scope, done_when, blocked_by — without re-laying its ' +
         'track: give only what changes. An empty string clears a text, an empty blocked_by list clears what it ' +
-        'waits on. Status, review and priority are not changed here (mark, done and review are for those).',
+        'waits on. `review` may only raise the step\'s review policy: lowering it is the person\'s call, in the pane. ' +
+        'Status and priority are not changed here (mark, done and review are for those).',
       inputSchema: {
         type: 'object',
-        properties: { step: { type: 'string' }, title: { type: 'string' }, ...brief },
+        properties: {
+          step: { type: 'string' },
+          title: { type: 'string' },
+          ...brief,
+          review: {
+            type: 'object',
+            description: 'Raise its review policy: { required, independence: any | other-session | cross-model, mode: standard | adversarial }.',
+            properties: {
+              required: { type: 'boolean' },
+              independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+              mode: { type: 'string', enum: ['standard', 'adversarial'] },
+            },
+            required: ['required'],
+          },
+        },
         required: ['step'],
       },
     })
@@ -1022,7 +1053,8 @@ export const register: Register = on => {
         'Close your work on a roadmap step with a structured report: what shipped, the evidence, and ' +
         'follow-ups. The step is marked done (a checkpoint waits for the person\'s confirmation); each ' +
         'follow-up becomes a new step in the track\'s "Follow-ups" phase, set aside in the backlog so the ' +
-        'person decides when it is worked on. Use status "failed" if it did not work out.',
+        'person decides when it is worked on. Use status "failed" if it did not work out. On a step that needs a ' +
+        'review, report done as soon as the work is ready for review — before any push or merge: the review comes after it.',
       inputSchema: {
         type: 'object',
         properties: {

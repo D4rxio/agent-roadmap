@@ -148,9 +148,19 @@ whole track:
 `independence` is `any`, `other-session` (not the chat that did the work) or `cross-model` (a different
 model family: Claude builds, Codex reviews). New steps must say it; `{ "required": false }` opts out on
 purpose. Keep it for the steps where a second look pays off — the complicated or risky ones. A worker's
-done waits for a qualifying review, and each new done needs a new one. A plan can raise a policy but
-never lower it. Because no process on one machine can prove which model wrote a review, a cross-model
-pass comes to **Needs you** with the reviewer and the evidence, and your **Confirm ✓** closes it.
+done waits for a qualifying review, and each new done needs a new one — so the worker reports done when
+the work is ready for review, before any push. A plan (or an agent's `edit`) can raise a policy but never
+lower it. Because no process on one machine can prove which model wrote a review, a cross-model pass comes
+to **Needs you** with the reviewer and the evidence, and your **Confirm ✓** closes it.
+
+**Your word on one step's review.** A step's ⋯ → **⚖ Review** sets its policy: another model, a fresh
+chat, any, none, and adversarial on or off. Raising it is saved at once. Lowering it — say, no Codex at
+hand, so a fresh Claude chat reviews instead — asks why, and the step then shows **⚖↓** with what it was
+laid out for, what it is now, your reason and the date, for as long as it stands, closed or not; its track
+counts such steps. No plan or agent changes a policy you set. A reviewer says what it did — `mode`
+(adversarial or standard), `fresh` (no implementation context), `ran_tests` — and that shows beside its
+verdict; nothing checks it, so a review that declares less than its policy asks is pointed out, not
+refused. A pass **with findings** shows "fixes not reviewed again" until a new round passes.
 
 **A Codex review that cannot write.** When Codex reviews in a read-only sandbox — as
 [claudex-loop](https://github.com/chaseai-yt/claudex-loop) runs it — it cannot write the roadmap. The host
@@ -171,11 +181,11 @@ when Codex finished, so it never counts for work reported done after it, and it 
 |---|---|
 | `roadmap plan` | lay out or re-lay one track: phases, steps with `why` / `scope` / `done_when`, checkpoints, `blocked_by` (loops are refused) |
 | `roadmap add` | add one step to a track that exists, with its brief, dependencies and review policy; nothing else in the track changes |
-| `roadmap edit` | change one step's title or brief (why, scope, done when, what it waits on) without re-laying its track |
+| `roadmap edit` | change one step's title or brief (why, scope, done when, what it waits on) without re-laying its track; raise its review policy (only you lower it) |
 | `roadmap step` | read one step's brief before working on it |
 | `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
-| `roadmap review` | record a review of a step's work: pass, findings or fail, with evidence |
+| `roadmap review` | record a review of a step's work: pass, findings or fail, with evidence and what the reviewer did (mode, fresh, tests run) |
 | `roadmap status` | read this project's open steps (`all` for every project) and who is working on what |
 
 ## Other agents: the CLI

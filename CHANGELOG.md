@@ -6,6 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **A step's review policy is yours to set, and a lowering stays visible.** ⋯ → **⚖ Review** picks another
+  model, a fresh chat, any or none, adversarial on or off. Raising saves at once; lowering asks why, and the
+  step shows **⚖↓** (from, to, reason, date) for as long as it stands — its track counts them — so a month
+  later it is clear which steps passed a weaker check. No plan or agent changes a policy you set; an
+  agent's `edit --review` may only raise one. For a machine without Codex, or a day its limit runs out.
+- **What a reviewer did, beside its verdict**: `mode`, `fresh` and `ran_tests` (declared, never checked).
+  A review that declares less than the adversarial review its policy asks for is pointed out.
+- **"Findings — fixes not reviewed again"** on a step that passed with findings, with how many follow-ups
+  the review filed, until a new round passes.
 - **`add` and `edit`** (tools and CLI): one step into a track that exists — phase, id (generated when
   absent), why, scope, done when, blocked_by, checkpoint, review, priority, backlog — or a change to one
   step's title or brief, and nothing else in the track changes. A duplicate id and a dependency loop are
@@ -17,6 +26,10 @@ versions follow [Semantic Versioning](https://semver.org/).
   and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
 
 ### Fixed
+- **Reviews refused because the work was not reported done.** Implementers were told to report done after
+  the push, while the review comes before it. The refusal now tells the reviewer to ask the implementer for
+  `done` (saying it waits for review), and a step that needs a review tells its implementer, in its brief
+  and in `done`, to report done when the work is ready for review, before any push.
 - **A proposed move or skip waited unseen, and Done ✓ answered it wrongly.** A step awaiting the person in
   a track set aside in the backlog no longer hides with its track: it shows in Needs you (marked "track in
   backlog"), since it can hold up work elsewhere. A step's ⋯ now offers **Confirm move → <target>** or

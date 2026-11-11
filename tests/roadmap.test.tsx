@@ -3059,7 +3059,7 @@ test('a Codex review carried over from its own session log: dated when Codex fin
   const fail = reviewAction(direct, { step: 'api/1', verdict: 'fail', evidence: 'two holes' })
   expect(fail.ok).toBe(true)
   expect(fold([...running, ...fail.emit], [], direct.now).tracks[0]!.steps[0]!.status).toBe('running')
-  expect(reviewAction(direct, { step: 'api/1', verdict: 'pass' }).text).toContain('report it done first')
+  expect(reviewAction(direct, { step: 'api/1', verdict: 'pass' }).text).toContain('Its implementer reports the work first')
   expect(brief(fold([...running, ...fail.emit], [], direct.now), 'api', '1')).toContain('round 1, review by codex: fail (of work not reported done) — two holes')
   // Not another model, not finished, not a review result: refused.
   expect(codexReviewAction(ctx, { step: 'api/1', rollout: rollout(ok, { model: 'claude-opus-5-5' }) }).ok).toBe(false)
@@ -3336,5 +3336,117 @@ test('a proposed move in a backlog track waits in Needs you; a step\'s ⋯ confi
   await ui.press({ key: 'ok-upload-O-11' })
   expect([...files.values()].some(t => t.includes('"status":"moved"') && t.includes('"origin":"person"') && t.includes('"movedTo":"fundament/S-1"'))).toBe(true)
   expect(board().tracks.find(t => t.name === 'p2')?.steps.find(x => x.id === 'SSW')?.status).toBe('todo')
+  await ui.unmount()
+})
+
+test('a step\'s review policy: an agent only raises it, the person sets it — a lowering stays visible; reviews say what they did', () => {
+  const cm = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const events: RoadmapEvent[] = [
+    {
+      kind: 'plan', at: 1000, session: 's', track: 'b', review: { required: true, independence: 'any', mode: 'standard' },
+      phases: [{ name: 'P', steps: [{ id: '4', title: 'Cluster paths', review: cm as never }, { id: '5', title: 'Docs' }] }],
+    },
+    { kind: 'step', at: 1100, session: 'impl', track: 'b', id: '4', status: 'done', actor: 'claude', origin: 'agent' },
+  ]
+  const ctx = { events, lives: [], now: 2000, session: 'c', actor: 'claude' }
+  const step = (evs: RoadmapEvent[], id: string) => fold(evs, [], 9000).tracks[0]!.steps.find(x => x.id === id)!
+  // C: before done, the brief says the review comes after it.
+  expect(brief(fold(events, [], 9000), 'b', '5')).toContain('Review comes after done')
+  expect(brief(fold(events, [], 9000), 'b', '4')).not.toContain('Review comes after done')
+
+  // An agent may raise a policy, never lower it.
+  const low = editAction(ctx, { step: 'b/4', review: { required: true, independence: 'other-session', mode: 'adversarial' } })
+  expect(low.ok).toBe(false)
+  expect(low.text).toContain('Only the person lowers a review policy')
+  const up = editAction(ctx, { step: 'b/5', review: { required: true, independence: 'other-session' } })
+  expect(up.text).toBe('b/5: changed review (fresh chat).')
+  expect(step([...events, ...up.emit], '5').review).toEqual({ required: true, independence: 'other-session', mode: 'standard' })
+  expect(step([...events, ...up.emit], '5').lowered).toBe(undefined)
+
+  // The person lowers it, with a reason: in force, shown as lowered, and no plan or agent raises it back.
+  const person: RoadmapEvent = {
+    kind: 'edit', at: 1200, session: 'pane', track: 'b', id: '4', origin: 'person',
+    review: { required: true, independence: 'other-session', mode: 'adversarial' }, reason: 'Codex limit',
+  }
+  const relaid = { ...(events[0] as object), at: 1300 } as RoadmapEvent
+  const evs = [...events, person, relaid]
+  const s4 = step(evs, '4')
+  expect(s4.review).toEqual({ required: true, independence: 'other-session', mode: 'adversarial' })
+  expect(s4.reviewSetBy).toBe('you')
+  expect(s4.lowered?.from).toEqual({ required: true, independence: 'cross-model', mode: 'adversarial' })
+  expect(s4.lowered?.reason).toBe('Codex limit')
+  expect(s4.policyLog?.map(l => [l.by, l.person])).toEqual([['you', true]])
+  const set = editAction({ ...ctx, events: evs }, { step: 'b/4', review: cm })
+  expect(set.text).toContain('was set by the person')
+
+  // B + D: a same-family review from a fresh chat now closes it; what it declared, and its findings, show.
+  const rv = reviewAction(
+    { ...ctx, events: evs, session: 'fresh', now: 2100 },
+    { step: 'b/4', verdict: 'findings', mode: 'adversarial', fresh: true, ran_tests: 'true', follow_ups: [{ title: 'A' }, { title: 'B' }] },
+  )
+  expect(rv.ok).toBe(true)
+  const done = [...evs, ...rv.emit]
+  const s = step(done, '4')
+  expect(s.status).toBe('done')
+  expect(s.findingsOpen).toBe(true)
+  expect(s.passedReview).toMatchObject({ mode: 'adversarial', fresh: true, ranTests: true, followUps: 2 })
+  const text = brief(fold(done, [], 9000), 'b', '4')!
+  expect(text).toContain('Review lowered by the person: ↓ cross-model, adversarial → fresh chat, adversarial (Codex limit)')
+  expect(text).toContain('Passed with findings (2 follow-ups filed)')
+  expect(text).toContain('[adversarial · fresh · tests run]')
+  expect(trackMarkdown(fold(done, [], 9000).tracks[0]!, 9000, 0)).toContain('review lowered by you: ↓ cross-model')
+  // A review that says it was not adversarial, where that is asked, is recorded and pointed out.
+  const std = reviewAction({ ...ctx, events: evs, session: 'fresh', now: 2100 }, { step: 'b/4', verdict: 'pass', mode: 'standard' })
+  expect(std.text).toContain('declared standard')
+  // The person raises it back: no longer lowered.
+  const back: RoadmapEvent = { kind: 'edit', at: 1400, session: 'pane', track: 'b', id: '4', origin: 'person', review: cm as never }
+  expect(step([...evs, back], '4').lowered).toBe(undefined)
+})
+
+test('the pane sets a step\'s review policy: raising saves at once, lowering asks why; a lowered step is counted on its track', async ($, on) => {
+  const events = [
+    { kind: 'plan', at: 1000, session: 's', track: 'b', review: { required: true, independence: 'any', mode: 'standard' }, phases: [{ name: 'P', steps: [{ id: '4', title: 'Paths' }, { id: '5', title: 'Docs' }] }] },
+    { kind: 'edit', at: 1100, session: 'pane', track: 'b', id: '5', origin: 'person', review: { required: false }, reason: 'docs only' },
+  ]
+  const files = new Map<string, string>(events.map((e, i) => [`/home/t/.claude/roadmap/events/${1000 + i}-o-x.json`, JSON.stringify(e)]))
+  const under = (dir: string) =>
+    [...files.keys()].filter(p => p.startsWith(dir + '/')).map(p => p.slice(dir.length + 1)).filter(n => !n.includes('/'))
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: under(e.path).length > 0 }))
+  on('fs.list', (_$, e) => ({
+    value: under(e.path ?? '').map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })),
+  }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/t' : undefined }))
+  on('session.id', () => ({ value: 'session-review-policy' }))
+  on('store.get', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ source: 'startup', cwd: '/w', surface: null, isInteractive: true } as never)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'fold-b' })
+  expect(await ui.find({ text: /⚖↓ 1/ })).toBeDefined()
+  expect(await ui.find({ text: /⚖↓ none/ })).toBeDefined()
+  await ui.press({ key: 'smenu-b/4' })
+  await ui.press({ key: 'revpol-b/4' })
+  // Raising: written at once, as the person's word.
+  await ui.press({ key: 'revpick-cross-model-b/4' })
+  for (let i = 0; i < 50 && ![...files.values()].some(t => t.includes('"cross-model"') && t.includes('"origin":"person"')); i++) await new Promise(r => setTimeout(r, 10))
+  expect([...files.values()].some(t => t.includes('"kind":"edit"') && t.includes('"cross-model"') && t.includes('"origin":"person"'))).toBe(true)
+  // Lowering: nothing written until the person says why.
+  const count = files.size
+  await ui.press({ key: 'smenu-b/4' })
+  await ui.press({ key: 'revpol-b/4' })
+  await ui.press({ key: 'revpick-any-b/4' })
+  expect(await ui.find({ key: 'revwhy-b/4' })).toBeDefined()
+  expect(files.size).toBe(count)
   await ui.unmount()
 })

@@ -124,6 +124,10 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
   // The strictest review policy each step has ever been under (its own or its track's), by
   // track/id: it outlives the step leaving a plan, so dropping and re-adding an id cannot shed it.
   const floors = new Map<string, RoadmapReviewPolicy>()
+  // The person's own word on a step's policy (an edit from the pane): it sets the policy as said, lowering
+  // included, and stands until the person's next word. Every edit of a policy is kept as its history.
+  const setPolicy = new Map<string, { at: number; policy: RoadmapReviewPolicy; reason?: string }>()
+  const policyLogs = new Map<string, NonNullable<RoadmapStep['policyLog']>>()
   const words = new Map<string, Word[]>()
   // Where each session said it works, and when: from its session events and its live files. A session can
   // move between repositories, so its project is a timeline, read at the moment that matters.
@@ -233,6 +237,21 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
       const k = key(e.track, e.id)
       const floor = stricter(policyOf(e.review), floors.get(k))
       if (floor) floors.set(k, floor)
+    } else if (e.kind === 'edit' && e.review) {
+      const k = key(e.track, e.id)
+      const policy = policyOf(e.review)
+      if (policy) {
+        const person = e.origin === 'person'
+        const reason = typeof e.reason === 'string' && e.reason.trim() ? e.reason.trim() : undefined
+        // An agent's edit raises, as a plan does; the person's sets the policy as said.
+        if (person) setPolicy.set(k, { at: e.at, policy, reason })
+        else {
+          const floor = stricter(policy, floors.get(k))
+          if (floor) floors.set(k, floor)
+        }
+        const by = person ? 'you' : (sessions.get(e.session)?.title ?? e.session.slice(0, 8))
+        policyLogs.set(k, [...(policyLogs.get(k) ?? []), { at: e.at, by, to: policy, reason, person }])
+      }
     } else if (e.kind === 'session') {
       const s = sessions.get(e.session)
       if (s) {
@@ -260,7 +279,22 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
       }
     } else if (e.kind === 'review') {
       const k = key(e.track, e.id)
-      reviews.set(k, [...(reviews.get(k) ?? []), { actor: e.actor, session: e.session, verdict: e.verdict, at: e.at, evidence: e.evidence, note: e.note, via: e.via }])
+      reviews.set(k, [
+        ...(reviews.get(k) ?? []),
+        {
+          actor: e.actor,
+          session: e.session,
+          verdict: e.verdict,
+          at: e.at,
+          evidence: e.evidence,
+          note: e.note,
+          via: e.via,
+          mode: e.mode === 'adversarial' || e.mode === 'standard' ? e.mode : undefined,
+          fresh: typeof e.fresh === 'boolean' ? e.fresh : undefined,
+          ranTests: typeof e.ranTests === 'boolean' ? e.ranTests : undefined,
+          followUps: typeof e.followUps === 'number' && e.followUps > 0 ? e.followUps : undefined,
+        },
+      ])
     } else if (e.kind === 'agent-end') {
       const a = agents.get(e.agentId)
       if (a && a.status === 'running') {
@@ -382,6 +416,16 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
       // The floor applies however the step came to be — laid by a plan, brought back by an `add` or an
       // edit — so no route around a plan sheds the policy a step was under.
       step.review = stricter(stricter(step.review ?? t.review, floors.get(k0)), carried.get(k0)?.policy)
+      // The person's own word sets it as said — no plan, agent or move raises it back. Where that is lower
+      // than what the step would be under otherwise, it shows as lowered for as long as it stands.
+      const set = setPolicy.get(k0)
+      if (set) {
+        const asked = step.review
+        step.review = set.policy
+        step.reviewSetBy = 'you'
+        if (!same(stricter(asked, set.policy), set.policy)) step.lowered = { from: asked ?? { required: false }, to: set.policy, at: set.at, reason: set.reason }
+      }
+      step.policyLog = policyLogs.get(k0)
       const work = said.filter(w => w.origin !== 'person' && (w.status === 'running' || w.status === 'done'))
       const last = work[work.length - 1]
       step.implementer = last?.actor || last?.session ? { actor: last.actor ?? 'unknown', session: last.session ?? '' } : undefined
@@ -410,6 +454,8 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
               ? 'reviewed'
               : 'satisfied'
         step.passedReview = step.reviewState === 'reviewed' || step.reviewState === 'satisfied' ? latest[latest.length - 1] : undefined
+        // Passed with findings: whatever was fixed after it has not been reviewed again.
+        step.findingsOpen = step.passedReview?.verdict === 'findings' || undefined
         // A worker's done waits for a qualifying review; the person's own done is final (an override).
         const doneWord = [...said].reverse().find(w => w.status === 'done')
         if (status === 'done' && doneWord && doneWord.origin !== 'person' && step.reviewState !== 'satisfied') {
@@ -851,6 +897,37 @@ export function policyText(policy: RoadmapReviewPolicy | undefined): string {
   if (!policy?.required) return 'no review required'
   const who = policy.independence === 'cross-model' ? 'cross-model' : policy.independence === 'other-session' ? 'independent' : 'any'
   return `${who} review${policy.mode === 'adversarial' ? ' (adversarial)' : ''} required`
+}
+
+/** A policy in a few words: "cross-model, adversarial", "fresh chat", "any", "none". */
+export function policyShort(policy: RoadmapReviewPolicy | undefined): string {
+  if (!policy?.required) return 'none'
+  const who = policy.independence === 'cross-model' ? 'cross-model' : policy.independence === 'other-session' ? 'fresh chat' : 'any'
+  return `${who}${policy.mode === 'adversarial' ? ', adversarial' : ''}`
+}
+
+/** What a reviewer says it did — "adversarial · fresh · tests run" — declared, never verified. */
+export function declaredText(r: RoadmapReview): string {
+  return [
+    r.mode ?? '',
+    r.fresh === true ? 'fresh' : r.fresh === false ? 'not fresh' : '',
+    r.ranTests === true ? 'tests run' : r.ranTests === false ? 'no tests run' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** Where a review, by its own declaration, falls short of the mode its policy asks for. Shown, never enforced. */
+export function declaredShort(policy: RoadmapReviewPolicy | undefined, r: RoadmapReview): string | undefined {
+  if (!policy?.required || policy.mode !== 'adversarial' || r.verdict === 'fail' || r.mode === 'adversarial') return undefined
+  return r.mode ? 'declared standard, adversarial asked' : 'no mode declared, adversarial asked'
+}
+
+/** "↓ cross-model → fresh chat (no Codex limit), 2026-11-11": a policy the person lowered. */
+export function loweredText(s: Pick<RoadmapStep, 'lowered'>): string | undefined {
+  const l = s.lowered
+  if (!l) return undefined
+  return `↓ ${policyShort(l.from)} → ${policyShort(l.to)}${l.reason ? ` (${l.reason})` : ''}, ${new Date(l.at).toISOString().slice(0, 10)}`
 }
 
 export const PRIORITIES: RoadmapPriority[] = ['P0', 'P1', 'P2', 'P3']
@@ -1301,12 +1378,25 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
       : s.review
         ? 'Review: not required for this step.'
         : '',
-    ...(s.reviewRounds ?? s.reviews).map(
-      (r, i) =>
-        `  round ${i + 1}, review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${
-          s.reportedAt === undefined ? ' (of work not reported done)' : r.at <= s.reportedAt ? ' (of earlier work)' : ''
-        }${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`,
-    ),
+    s.lowered
+      ? `Review lowered by the person: ${loweredText(s)}. This step passes a weaker check than it was laid out for; only the person changes it.`
+      : s.reviewSetBy
+        ? 'Review policy set by the person: only they change it (agents cannot raise or lower it).'
+        : '',
+    s.findingsOpen
+      ? `Passed with findings${s.passedReview?.followUps ? ` (${s.passedReview.followUps} follow-up${s.passedReview.followUps === 1 ? '' : 's'} filed)` : ''}: fixes made after that review have not been reviewed again.`
+      : '',
+    // Review comes after done: a reviewer cannot record a pass of work nobody reported.
+    s.review?.required && s.reportedAt === undefined && s.status !== 'done' && s.status !== 'skipped' && s.status !== 'moved'
+      ? 'Review comes after done: as soon as the work is ready for review — before any push or merge — report it with roadmap done (say in it that it waits for review). Until then no reviewer can record a pass.'
+      : '',
+    ...(s.reviewRounds ?? s.reviews).map((r, i) => {
+      const said = declaredText(r)
+      const short = declaredShort(s.review, r)
+      return `  round ${i + 1}, review by ${r.actor}${r.via === 'declared' ? ' (declared, unverified)' : ''}: ${r.verdict}${
+        s.reportedAt === undefined ? ' (of work not reported done)' : r.at <= s.reportedAt ? ' (of earlier work)' : ''
+      }${said ? ` [${said}]` : ''}${short ? ` ⚠ ${short}` : ''}${r.evidence ? ` — ${r.evidence}` : ''}${r.note ? ` (${r.note})` : ''}`
+    }),
     s.blockedBy.length ? `Waits on:\n${s.blockedBy.map(r => `  ${ref(r)}`).join('\n')}` : '',
     dependents.length
       ? `Unblocks:${s.unblocks ? ` ${s.unblocks} open step${s.unblocks === 1 ? ' waits' : 's wait'} on it, down the chain` : ''}\n${dependents.map(x => `  ${x}`).join('\n')}`
@@ -1597,8 +1687,11 @@ export function trackMarkdown(track: RoadmapTrack, now: number, offsetMin: numbe
       if (s.scope) lines.push(`  - scope: ${s.scope}`)
       if (s.doneWhen) lines.push(`  - done when: ${s.doneWhen}`)
       if (s.review?.required) {
-        lines.push(`  - review: ${policyText(s.review)}${s.reviews.length ? `; ${s.reviews.map(r => `${r.actor} ${r.verdict}`).join(', ')}` : '; none yet'}`)
+        lines.push(
+          `  - review: ${policyText(s.review)}${s.reviews.length ? `; ${s.reviews.map(r => `${r.actor} ${r.verdict}${declaredText(r) ? ` (${declaredText(r)})` : ''}`).join(', ')}` : '; none yet'}${s.findingsOpen ? '; fixes after the findings not reviewed again' : ''}`,
+        )
       }
+      if (s.lowered) lines.push(`  - review lowered by you: ${loweredText(s)}`)
     }
     lines.push('')
   }

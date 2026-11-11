@@ -96,6 +96,11 @@ Any tool may read it, and append to it under the same rules, so other agents and
   never satisfies `cross-model`; reviews written before `via` existed still count. The CLI never records a
   review as Claude — Claude reviews through its own tool. This keeps identities from being mixed up by
   accident; it does not prove them, which is why a cross-model pass waits for the person.
+- A `review` may say what the reviewer did: `mode` (`standard` | `adversarial`), `fresh` (came without the
+  implementation's context) and `ranTests` (ran tests or mutations), and `followUps`, how many follow-up
+  steps it filed. They are declarations, shown beside the verdict and never checked; a review that declares
+  less than the `adversarial` mode its policy asks is pointed out, not refused. A pass with `findings`
+  shows as findings whose fixes were not reviewed again until a later round passes.
 - `archived` (track-level `triage`, the person's only) puts a track away; a later `archived: false` brings it back.
   Put away with every step done, skipped or moved, it is done; otherwise abandoned.
 - `rank` (track-level `triage`, the person's only) places a track in the list: tracks sort by it, lowest
@@ -127,6 +132,11 @@ Any tool may read it, and append to it under the same rules, so other agents and
   `scope`, `doneWhen`, `review` (a floor, as a plan's) — and an `edit` may change `title`, `why`, `scope`,
   `doneWhen` and `blockedBy` (an empty string or list clears it). Per field the latest word wins, a
   plan's included; a removal holds until a later plan lays the step out again.
+- An `edit` may carry `review` (and `reason`). An agent's is a floor, as a plan's: it can only raise the
+  policy (writers refuse a lowering). The person's sets the step's policy as said — lowering included — and
+  stands until the person's next word: no plan, agent edit, `add` or move raises it back. Where it is lower
+  than what the step would be under otherwise, readers show it as lowered (from, to, reason, when) for as
+  long as it stands, a closed step included.
 - `triage` is planning, not execution: `priority` is `P0` (most urgent) … `P3`, `null` clears it;
   `backlog: true` sets a step aside (or, with no `id`, a whole track): it keeps its status but leaves
   progress and the next-work list. Per field the person's latest word wins; an agent's applies only

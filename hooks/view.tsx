@@ -1,5 +1,5 @@
-import type { RoadmapBoard, RoadmapPriority, RoadmapReview, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
-import { ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, rankFor, trackDone, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
+import type { RoadmapBoard, RoadmapPriority, RoadmapReview, RoadmapReviewPolicy, RoadmapStatus, RoadmapStep, RoadmapTrack } from '../types'
+import { declaredShort, declaredText, loweredText, policyOf, policyShort, stricter, ICONS, PRIORITIES, attention, chainGraph, chainText, externalNote, mermaidOf, rankFor, trackDone, workingIn, family, byPriority, days, doneSeries, dayOf, duration, progress, progressBar, when } from './model'
 import type { ChainGraph, ChainNode } from './model'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -43,6 +43,8 @@ export type PaneData = {
   onPlace?: (track: string, project: string | null) => void
   /** The person removes a project: its tracks go to no project. */
   onRemoveProject?: (project: string) => void
+  /** The person sets one step's review policy (raised or lowered), with the reason for a lowering. */
+  onReviewPolicy?: (track: string, id: string, policy: RoadmapReviewPolicy, reason: string) => void
   view: RoadmapView
   expanded: string[]
   now: number
@@ -150,6 +152,26 @@ function thisChat(els: Els, d: PaneData) {
       ])}
       {Btn(els, d, { key: "unpin", plain: true, onPress: () => d.onPin('') }, "Unpin", <Text><Text dimColor>Unpin</Text></Text>)}
     </Box>
+  )
+}
+
+/**
+ * What a person should know before confirming a reviewed step: a policy they lowered, a review that by its
+ * own word falls short of the mode asked, and findings whose fixes nobody reviewed again.
+ */
+function reviewNotes(els: Els, st: RoadmapStep) {
+  const { Text } = els
+  const r = st.passedReview
+  const notes = [
+    st.lowered ? `review lowered by you: ${loweredText(st)}` : '',
+    r && declaredShort(st.review, r) ? `⚠ ${declaredShort(st.review, r)}` : '',
+    st.findingsOpen ? `findings${r?.followUps ? `: ${r.followUps} follow-up${r.followUps === 1 ? '' : 's'}` : ''} — fixes not reviewed again` : '',
+  ].filter(Boolean)
+  if (!notes.length) return null
+  return (
+    <Text key={`rnotes-${st.track}-${st.id}`} color="warning" wrap="truncate-end">
+      {`   ${notes.join(' · ')}`}
+    </Text>
   )
 }
 
@@ -685,7 +707,7 @@ function needsYou(els: Els, d: PaneData) {
           {st.reviewPending ? (
             <Text dimColor wrap="truncate-end">{`   waits for ${whoseReview(st)}${st.review?.independence === 'cross-model' ? ` — a model other than ${family(st.implementer?.actor)} must review it` : ''}${st.reviewState === 'failed' ? `; the last one failed${roundOf(st, st.reviews[st.reviews.length - 1])}` : ''}`}</Text>
           ) : st.reviewState === 'reviewed' && st.passedReview ? (
-            <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${roundOf(st, st.passedReview)}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
+            <Text dimColor wrap="truncate-end">{`   ⚖ ${st.passedReview.verdict} by ${st.passedReview.actor}${st.passedReview.via ? ` (${st.passedReview.via})` : ''}${roundOf(st, st.passedReview)}${declaredText(st.passedReview) ? ` · ${declaredText(st.passedReview)}` : ''}${st.passedReview.evidence ? ` — ${st.passedReview.evidence}` : ''}`}</Text>
           ) : st.proposed === 'moved' ? (
             <Text dimColor wrap="truncate-end">{st.moveProblem
               ? `   proposes moving it to ${st.movedTo ?? '?'}, but ${st.moveProblem} — reject it, or ask for another target`
@@ -695,6 +717,7 @@ function needsYou(els: Els, d: PaneData) {
           ) : st.evidence || st.lastBy ? (
             <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}`}</Text>
           ) : null}
+          {reviewNotes(els, st)}
           <Box flexDirection="row" gap={1} marginTop={0}>
             <Text>{'  '}</Text>
             {st.moveProblem ? null : (
@@ -843,10 +866,13 @@ function trackCard(els: Els, d: PaneData, t: RoadmapTrack, only?: Set<string>, s
   const blocked = active.filter(s => s.status === 'blocked').length
   const running = t.steps.filter(s => s.status === 'running').length
   const awaiting = t.steps.filter(s => s.status === 'awaiting').length
+  const lowered = t.steps.filter(s => s.lowered).length
   const live = d.board.sessions.filter(s => s.isLive && s.track === t.name).length
   const chips = [
     running ? `◐ ${running}` : '',
     awaiting ? `◆ ${awaiting}` : '',
+    // Steps that pass a weaker review than they were laid out for: the person lowered it.
+    lowered ? `⚖↓ ${lowered}` : '',
     blocked ? `⊘ ${blocked}` : '',
     live ? `● ${live} live` : '',
     shelved.length ? `${shelved.length} in backlog` : '',
@@ -994,6 +1020,30 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       </Box>
     )
   }
+  if (d.editing === `rev:${ref}` && d.onReviewPolicy) return reviewPicker(els, d, t, s)
+  const why = d.editing.startsWith('revwhy:') && d.editing.endsWith(`:${ref}`) ? d.editing.split(':') : undefined
+  if (why && Input && d.onReviewPolicy) {
+    const policy = pickedPolicy(why[1] ?? '', why[2] ?? '')
+    return (
+      <Box key={`step-${ref}`} flexDirection="row" gap={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Input
+            key={`revwhy-${ref}`}
+            placeholder={`Why lower ${s.id} to ${policyShort(policy)}? Enter to save`}
+            value=""
+            autoFocus
+            onSubmit={(value: string) => {
+              if (value.trim()) d.onReviewPolicy?.(t.name, s.id, policy, value.trim())
+              d.onStartEdit('')
+            }}
+          />
+        </Box>
+        <Button key={`cancel-revwhy-${ref}`} plain onPress={() => d.onStartEdit('')}>
+          Cancel
+        </Button>
+      </Box>
+    )
+  }
   if (d.editing === ref && Input) {
     return (
       <Box key={`step-${ref}`} flexDirection="row" gap={1}>
@@ -1034,6 +1084,8 @@ function stepRow(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
                   : { text: `  ⚖ ${s.review.independence === 'cross-model' ? 'cross-model' : 'review'}`, color: 'subtle' },
             ]
           : []),
+        ...(s.lowered ? [{ text: `  ⚖↓ ${policyShort(s.lowered.to)}`, color: 'warning' }] : []),
+        ...(s.findingsOpen ? [{ text: '  findings: fixes unreviewed', color: 'warning' }] : []),
         ...(t.next === ref ? [{ text: '  ▸ next', color: 'suggestion' }] : []),
         ...(s.unblocks ? [{ text: `  ⇢${s.unblocks}`, dim: true }] : []),
         ...(s.addedBy ? [{ text: '  ✎ you', color: 'suggestion' }] : []),
@@ -1157,9 +1209,60 @@ function stepMenu(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
       )}
       {d.focus !== ref ? Btn(els, d, { key: `pin-${ref}`, plain: true, onPress: then(() => d.onPin(ref)) }, 'Pin', <Text>Pin</Text>) : null}
       {open && els.Input ? Btn(els, d, { key: `skipit-${ref}`, plain: true, onPress: () => d.onStartEdit(`skip:${ref}`) }, 'Skip', <Text>Skip</Text>) : null}
+      {d.onReviewPolicy ? Btn(els, d, { key: `revpol-${ref}`, plain: true, onPress: () => d.onStartEdit(`rev:${ref}`) }, `⚖ Review: ${policyShort(s.review)}`, <Text>{`⚖ Review: ${policyShort(s.review)}`}</Text>) : null}
       {!s.backlog ? Btn(els, d, { key: `shelve-${ref}`, plain: true, onPress: then(() => d.onBacklog(t.name, s.id, true)) }, 'Backlog', <Text>Backlog</Text>) : null}
       {s.addedBy ? Btn(els, d, { key: `rename-${ref}`, plain: true, onPress: () => d.onStartEdit(ref) }, 'Rename', <Text>✎ Rename</Text>) : null}
       {s.addedBy ? Btn(els, d, { key: `remove-${ref}`, plain: true, onPress: then(() => d.onRemove(t.name, s.id)) }, 'Remove', <Text>✕ Remove</Text>) : null}
+    </Box>
+  )
+}
+
+/** A policy from the picker's words: who reviews (`cross-model`, `other-session`, `any`, `none`) and how. */
+function pickedPolicy(who: string, mode: string): RoadmapReviewPolicy {
+  return who === 'none' ? { required: false } : policyOf({ required: true, independence: who, mode })!
+}
+
+/**
+ * The person picks a step's review policy. Raising it is saved at once; lowering it asks why first, and the
+ * step then shows it as lowered for as long as it stands.
+ */
+function reviewPicker(els: Els, d: PaneData, t: RoadmapTrack, s: RoadmapStep) {
+  const { Box, Text } = els
+  const ref = `${t.name}/${s.id}`
+  const now = s.review
+  const mode = now?.required ? (now.mode ?? 'standard') : 'standard'
+  const choose = (who: string, m: string) => () => {
+    const next = pickedPolicy(who, m)
+    if (policyShort(next) === policyShort(now)) return d.onStartEdit('')
+    // Lower in any part (who reviews, or how): the person says why, and it is recorded as lowered.
+    const lowers = policyShort(stricter(now, next)) !== policyShort(next)
+    if (lowers && els.Input) return d.onStartEdit(`revwhy:${who}:${m}:${ref}`)
+    d.onReviewPolicy?.(t.name, s.id, next, '')
+    d.onStartEdit('')
+  }
+  const options: [string, string][] = [
+    ['cross-model', 'another model'],
+    ['other-session', 'fresh chat'],
+    ['any', 'any'],
+    ['none', 'none'],
+  ]
+  return (
+    <Box key={`step-${ref}`} flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <Text dimColor>{`⚖ ${s.id} review:`}</Text>
+      {options.map(([who, label]) => {
+        const here = who === 'none' ? !now?.required : now?.required && now.independence === who
+        return Btn(els, d, { key: `revpick-${who}-${ref}`, plain: true, onPress: choose(who, mode) }, label, <Text bold={here} color={here ? 'suggestion' : undefined}>{`${here ? '● ' : ''}${label}`}</Text>)
+      })}
+      {now?.required
+        ? Btn(
+            els,
+            d,
+            { key: `revmode-${ref}`, plain: true, onPress: choose(now.independence ?? 'cross-model', mode === 'adversarial' ? 'standard' : 'adversarial') },
+            mode === 'adversarial' ? 'adversarial: on' : 'adversarial: off',
+            <Text>{mode === 'adversarial' ? 'adversarial: on' : 'adversarial: off'}</Text>,
+          )
+        : null}
+      {Btn(els, d, { key: `revcancel-${ref}`, plain: true, onPress: () => d.onStartEdit('') }, 'Cancel', <Text>Cancel</Text>)}
     </Box>
   )
 }
