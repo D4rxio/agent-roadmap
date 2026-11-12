@@ -647,7 +647,7 @@ function shelvedNote(d: PaneData, st: RoadmapStep): { text: string; dim: true }[
 function needsYou(els: Els, d: PaneData) {
   const { Box, Text, Button } = els
   const needs = attention(d.board)
-  if (needs.awaiting.length + needs.failed.length + needs.stale.length + needs.brokenMoves.length === 0) return null
+  if (needs.awaiting.length + needs.failed.length + needs.stale.length + needs.brokenMoves.length + needs.unblocked.length === 0) return null
   const titleOf = (track: string) => d.board.tracks.find(t => t.name === track)?.title ?? track
   return (
     <Box key="attention" flexDirection="column" marginBottom={1}>
@@ -657,6 +657,7 @@ function needsYou(els: Els, d: PaneData) {
         {needs.failed.length ? <Text color="error">{`✗ ${needs.failed.length} failed`}</Text> : null}
         {needs.stale.length ? <Text color="warning">{`◌ ${needs.stale.length} stale`}</Text> : null}
         {needs.brokenMoves.length ? <Text color="warning">{`↪ ${needs.brokenMoves.length} move${needs.brokenMoves.length === 1 ? '' : 's'} going nowhere`}</Text> : null}
+        {needs.unblocked.length ? <Text color="suggestion">{`▸ ${needs.unblocked.length} unblocked today`}</Text> : null}
       </Box>
       {needs.brokenMoves.map(st => (
         <Box key={`broken-${st.track}-${st.id}`} flexDirection="column" marginTop={1}>
@@ -715,7 +716,7 @@ function needsYou(els: Els, d: PaneData) {
           ) : st.proposed === 'skipped' ? (
             <Text dimColor wrap="truncate-end">{`   proposes skipping: ${st.skipReason ?? 'no reason given'}${st.lastBy ? ` · by ${st.lastBy}` : ''}`}</Text>
           ) : st.evidence || st.lastBy ? (
-            <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}`}</Text>
+            <Text dimColor wrap="truncate-end">{`   ${st.evidence ?? `by ${st.lastBy}`}${(st.history?.length ?? 0) > 1 ? ` · +${st.history!.length - 1} earlier` : ''}`}</Text>
           ) : null}
           {reviewNotes(els, st)}
           <Box flexDirection="row" gap={1} marginTop={0}>
@@ -753,6 +754,19 @@ function needsYou(els: Els, d: PaneData) {
           </Box>
         </Box>
       ))}
+      {needs.unblocked.length ? (
+        <Box key="unblocked" flexDirection="column" marginTop={1}>
+          {needs.unblocked.slice(0, 5).map(st =>
+            Line(els, `unblocked-${st.track}-${st.id}`, [
+              { text: '▸ ', color: 'suggestion' },
+              { text: `${st.track}/${st.id} `, bold: true },
+              { text: st.title, main: true },
+              { text: `  free since ${st.unblockedAt ? when(st.unblockedAt, d.now, d.tz) : 'today'}${st.checkpoint ? ' · checkpoint' : ''}`, dim: true },
+            ]),
+          )}
+          {needs.unblocked.length > 5 ? <Text dimColor>{`  … ${needs.unblocked.length - 5} more`}</Text> : null}
+        </Box>
+      ) : null}
     </Box>
   )
 }

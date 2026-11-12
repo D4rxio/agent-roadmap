@@ -353,8 +353,10 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
   if (input.status !== undefined && !status) {
     return refused(`Unknown status; use one of ${STATUSES.filter(s => s !== 'awaiting').join(', ')}.`)
   }
-  if (!status && priority === undefined && backlog === undefined) {
-    return refused('Give a status, a priority (P0…P3 or none) or backlog (true/false).')
+  const evidence = text(input.evidence)
+  const note = text(input.note)
+  if (!status && priority === undefined && backlog === undefined && !evidence && !note) {
+    return refused('Give a status, a priority (P0…P3 or none), backlog (true/false), or evidence / a note to add to the step\'s history.')
   }
   const reason = text(input.reason)
   if (status === 'skipped' && !reason) {
@@ -366,6 +368,7 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     const name = slug(whole[1] ?? '')
     if (!now.tracks.some(t => t.name === name)) return refused(`No track "${name}".`)
     if (status) return refused('A whole track takes a priority or backlog, not a status.')
+    if (priority === undefined && backlog === undefined) return refused('Evidence and notes go on a step, not a whole track.')
     const ev: RoadmapEvent = { kind: 'triage', at: ctx.now, session: ctx.session, track: name, priority, backlog, origin: 'agent' }
     const t = fold([...ctx.events, ev], [], ctx.now).tracks.find(x => x.name === name)
     const kept = t?.triagedBy === 'you' ? " (the person's own choice stands)" : ''
@@ -406,11 +409,16 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     emit.push({ kind: 'triage', at: ctx.now, session: ctx.session, track: ref.track, id: ref.id, priority, backlog, origin: 'agent' })
   }
   if (!status) {
+    // Evidence or a note alone joins the step's history and changes nothing else: not its status, not
+    // whether its review counts (a pass counts for work reported done before it, and this reports none).
+    if (evidence || note) emit.push({ kind: 'note', at: ctx.now + 1, session: ctx.session, track: ref.track, id: ref.id, evidence, note, origin: 'agent', actor: ctx.actor })
     const s = after(ctx, emit, ref.track, ref.id)
     const kept = s?.triagedBy === 'you' ? " (the person's own choice stands)" : ''
+    const added = evidence || note ? `${ref2}: ${evidence && note ? 'evidence and a note' : evidence ? 'evidence' : 'a note'} added to its history (${s?.history?.length ?? 1} entr${(s?.history?.length ?? 1) === 1 ? 'y' : 'ies'}); status ${s?.status ?? 'todo'} and its review are unchanged.` : ''
+    const triaged = priority !== undefined || backlog !== undefined ? `${ref2}: priority ${s?.priority ?? 'none'}, ${s?.backlog ? 'in backlog' : 'active'}${kept}.` : ''
     return {
       ok: true,
-      text: `${ref2}: priority ${s?.priority ?? 'none'}, ${s?.backlog ? 'in backlog' : 'active'}${kept}.`,
+      text: [added, triaged].filter(Boolean).join('\n'),
       emit,
       track: ref.track,
     }
@@ -422,8 +430,8 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
     track: ref.track,
     id: ref.id,
     status,
-    note: text(input.note),
-    evidence: text(input.evidence),
+    note,
+    evidence,
     reason,
     movedTo,
     origin: 'agent',
@@ -448,13 +456,16 @@ export function markAction(ctx: ActionContext, input: Record<string, unknown>): 
   }
 }
 
+/** The review a follow-up gets unless it names one: any reviewer will do. */
+const FOLLOW_UP_REVIEW: RoadmapReviewPolicy = { required: true, independence: 'any', mode: 'standard' }
+
 /** Close work on a step: what shipped, the evidence, and follow-ups filed in the backlog. */
 /**
  * Follow-ups go to the track's Follow-ups phase, set aside in the backlog: the person decides when they
  * are worked on. Appends the events to `emit` and returns the line that lists them (empty if none).
  */
 function addFollowUps(ctx: ActionContext, emit: RoadmapEvent[], trackName: string, input: unknown): string {
-  const raw = Array.isArray(input) ? (input as { title?: unknown; priority?: unknown }[]) : []
+  const raw = Array.isArray(input) ? (input as { title?: unknown; priority?: unknown; review?: unknown }[]) : []
   const added: string[] = []
   let at = ctx.now + 1
   for (const f of raw) {
@@ -465,7 +476,10 @@ function addFollowUps(ctx: ActionContext, emit: RoadmapEvent[], trackName: strin
     if (!track) break
     const id = nextId(track, all, 'f')
     const priority = PRIORITIES.includes(f.priority as RoadmapPriority) ? (f.priority as RoadmapPriority) : undefined
-    emit.push({ kind: 'add', at: at++, session: ctx.session, track: trackName, id, title, phase: FOLLOW_UPS, origin: 'agent' })
+    // A follow-up is usually small (a test, a note in a doc): it takes any review, not the track's, unless
+    // it says otherwise. Raising it later is explicit (edit).
+    const review = readPolicy(f.review).policy ?? FOLLOW_UP_REVIEW
+    emit.push({ kind: 'add', at: at++, session: ctx.session, track: trackName, id, title, phase: FOLLOW_UPS, review, origin: 'agent' })
     emit.push({ kind: 'triage', at: at++, session: ctx.session, track: trackName, id, backlog: true, priority, origin: 'agent' })
     added.push(`${trackName}/${id} ${title}`)
   }

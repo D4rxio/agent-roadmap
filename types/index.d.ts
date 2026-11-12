@@ -93,6 +93,21 @@ export type RoadmapEvent =
       actor?: string
     }
   | { kind: 'session'; at: number; session: string; title: string; track?: string; actor?: string; project?: string }
+  /**
+   * Evidence or a note added to a step's history, with no status: it changes neither the status nor the
+   * review state (a PR merged after the work was reviewed, say). Kept with every other piece of evidence.
+   */
+  | {
+      kind: 'note'
+      at: number
+      session: string
+      track: string
+      id: string
+      evidence?: string
+      note?: string
+      origin?: RoadmapOrigin
+      actor?: string
+    }
   | {
       kind: 'agent'
       at: number
@@ -204,6 +219,11 @@ export type RoadmapStep = {
   evidence?: string
   checkpoint: boolean
   blockedBy: string[]
+  /**
+   * Every piece of evidence and every note the step was given, oldest first — with a status report, or on
+   * its own (a `note` event, `status` absent). `evidence` and `note` above are the latest of them.
+   */
+  history?: { at: number; by: string; status?: RoadmapStatus; evidence?: string; note?: string }[]
   /** Who last moved it: a session title, `you`, or an actor. */
   lastBy?: string
   lastAt?: number
@@ -223,6 +243,8 @@ export type RoadmapStep = {
   moveProblem?: string
   /** Steps whose obligation was moved here (directly or through a chain): this step answers for them. */
   carries?: string[]
+  /** When the last step it waited on closed: it was free to start from then. Computed; open steps only. */
+  unblockedAt?: number
   /** Running, but nobody has been on it for a while: probably abandoned. Computed, never written. */
   stale?: boolean
   /**

@@ -15,7 +15,11 @@ R="node ~/.claude/mods/roadmap/cli/roadmap.mjs"
 - **When you start**, mark it: `$R mark <track>/<id> running`.
 - **When you finish**, close it with a report:
   `$R done <track>/<id> --shipped "what was delivered" --evidence "tests, commit, PR" --follow-up "title:P2"`.
-  Follow-ups go to the backlog; the person decides when they are worked on.
+  Follow-ups go to the backlog; the person decides when they are worked on. A follow-up takes any review
+  unless you raise it (`$R edit <ref> --review …`): it does not inherit the track's.
+- **Later news about a step** (the PR merged, a fix landed): `$R mark <track>/<id> --evidence "…"` (or
+  `--note`) with no status adds it to the step's history, with its date; status and review stay as they
+  are. Never report `done` again for that — a new done is new work and needs a new review.
 - **For analysis and architecture**: `$R json` gives the whole board; `$R md [track]` gives Markdown;
   `$R mermaid [track] [--out file.md]` gives what waits on what as a Mermaid diagram for a doc or a PR.
   To lay out or re-lay a track, write the plan as JSON and run `$R plan <track> plan.json` — give each

@@ -137,6 +137,12 @@ Any tool may read it, and append to it under the same rules, so other agents and
   stands until the person's next word: no plan, agent edit, `add` or move raises it back. Where it is lower
   than what the step would be under otherwise, readers show it as lowered (from, to, reason, when) for as
   long as it stands, a closed step included.
+- `note` (`evidence` and/or `note`, no status) adds to a step's history and nothing else: it changes
+  neither its status nor its review state (a review still counts for the work last reported done). Readers
+  keep every piece of evidence and every note — from step reports and from notes — with its date, oldest
+  first; the latest is the step's evidence.
+- A follow-up an agent files (with `done` or `review`) carries its own `review`: any reviewer, unless the
+  writer names one. It does not take the track's default.
 - `triage` is planning, not execution: `priority` is `P0` (most urgent) … `P3`, `null` clears it;
   `backlog: true` sets a step aside (or, with no `id`, a whole track): it keeps its status but leaves
   progress and the next-work list. Per field the person's latest word wins; an agent's applies only

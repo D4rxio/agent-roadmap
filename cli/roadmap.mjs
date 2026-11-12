@@ -21,7 +21,8 @@
 //                                       change one step's title or brief ("" clears a text); --review only
 //                                       raises its policy (lowering is the person's, in the Roadmap pane)
 //   roadmap mark <ref> [status] [--evidence …] [--note …] [--reason …] [--to <ref>] [--priority P0-P3|none] [--backlog true|false]
-//                                       status: todo running done failed blocked skipped moved
+//                                       status: todo running done failed blocked skipped moved; with no
+//                                       status, --evidence / --note only add to the step's history
 //                                       (skipped needs --reason; moved needs --to and --reason: the obligation
 //                                       goes to that step, still to be done there; the person confirms)
 //   roadmap done <ref> --shipped "…" [--evidence …] [--failed] [--follow-up "title[:P1]"]…

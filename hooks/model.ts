@@ -74,7 +74,7 @@ export function refInText(
  * the latest plan of a track lays it out, the latest word on a step wins
  * (an explicit mark or an agent's start/end), duplicates change nothing.
  */
-const KIND_ORDER: string[] = ['session', 'plan', 'add', 'edit', 'agent', 'agent-end', 'step', 'triage', 'review']
+const KIND_ORDER: string[] = ['session', 'plan', 'add', 'edit', 'agent', 'agent-end', 'step', 'note', 'triage', 'review']
 const STATUS_ORDER: string[] = ['todo', 'running', 'blocked', 'failed', 'skipped', 'moved', 'done']
 
 /**
@@ -129,6 +129,8 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
   const setPolicy = new Map<string, { at: number; policy: RoadmapReviewPolicy; reason?: string }>()
   const policyLogs = new Map<string, NonNullable<RoadmapStep['policyLog']>>()
   const words = new Map<string, Word[]>()
+  // Evidence and notes given with no status: history only, never a status or a review state.
+  const notes = new Map<string, { at: number; by: string; evidence?: string; note?: string }[]>()
   // Where each session said it works, and when: from its session events and its live files. A session can
   // move between repositories, so its project is a timeline, read at the moment that matters.
   const declared = new Map<string, { at: number; project: string }[]>()
@@ -237,6 +239,14 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
       const k = key(e.track, e.id)
       const floor = stricter(policyOf(e.review), floors.get(k))
       if (floor) floors.set(k, floor)
+    } else if (e.kind === 'note') {
+      const k = key(e.track, e.id)
+      const evidence = typeof e.evidence === 'string' && e.evidence.trim() ? e.evidence.trim() : undefined
+      const note = typeof e.note === 'string' && e.note.trim() ? e.note.trim() : undefined
+      if (evidence || note) {
+        const by = e.origin === 'person' ? 'you' : (sessions.get(e.session)?.title ?? e.actor ?? e.session.slice(0, 8))
+        notes.set(k, [...(notes.get(k) ?? []), { at: e.at, by, evidence, note }])
+      }
     } else if (e.kind === 'edit' && e.review) {
       const k = key(e.track, e.id)
       const policy = policyOf(e.review)
@@ -464,11 +474,18 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
         }
         step.reviewPending = status === 'awaiting' && (step.reviewState === 'missing' || step.reviewState === 'failed') && step.proposed === 'done'
       }
+      // Every piece of evidence and every note, from reports and on their own, oldest first: a later one
+      // never overwrites an earlier one, and the latest is what the step shows.
+      const history = [
+        ...said.filter(w => w.evidence !== undefined || w.note !== undefined).map(w => ({ at: w.at, by: w.by ?? 'unknown', status: w.status, evidence: w.evidence, note: w.note })),
+        ...(notes.get(k0) ?? []),
+      ].sort((a, b) => a.at - b.at)
+      step.history = history.length ? history : undefined
+      step.note = [...history].reverse().find(w => w.note !== undefined)?.note
+      step.evidence = [...history].reverse().find(w => w.evidence !== undefined)?.evidence
       const latest = said[said.length - 1]
       if (!latest) continue
       step.status = status
-      step.note = [...said].reverse().find(w => w.note !== undefined)?.note
-      step.evidence = [...said].reverse().find(w => w.evidence !== undefined)?.evidence
       step.lastBy = latest.by
       step.lastAt = latest.at
       const firstActive = said.find(w => w.status !== 'todo' && w.status !== 'blocked')
@@ -495,6 +512,21 @@ export function fold(allEvents: RoadmapEvent[], allLives: RoadmapLive[], now: nu
     for (const step of t.steps) {
       if (step.status === 'todo' && step.blockedBy.some(r => !doneRefs.has(r))) step.status = 'blocked'
     }
+  }
+  // When a step that waited on others became free: the latest of their closings (a moved one closes when
+  // the step carrying its obligation does).
+  const byRef = new Map([...tracks.values()].flatMap(t => t.steps.map(s => [key(t.name, s.id), s] as const)))
+  const closedAt = (r: string): number | undefined => {
+    const s = byRef.get(r)
+    if (!s || !doneRefs.has(r)) return undefined
+    if (s.status !== 'moved') return s.endedAt
+    const end = s.movedFinal ? byRef.get(s.movedFinal) : undefined
+    return end?.endedAt === undefined ? undefined : Math.max(end.endedAt, s.endedAt ?? 0)
+  }
+  for (const step of byRef.values()) {
+    if ((step.status !== 'todo' && step.status !== 'running') || !step.blockedBy.length) continue
+    const ats = step.blockedBy.map(closedAt)
+    if (ats.every((a): a is number => a !== undefined)) step.unblockedAt = Math.max(...ats)
   }
 
   for (const live of lives) {
@@ -685,6 +717,7 @@ export function attention(board: RoadmapBoard): {
   failed: RoadmapStep[]
   stale: RoadmapStep[]
   brokenMoves: RoadmapStep[]
+  unblocked: RoadmapStep[]
 } {
   const all = board.tracks.filter(t => !t.backlog && !t.archived).flatMap(t => t.steps)
   // What waits for the person's word waits whatever the track: a step in a set-aside track can still hold
@@ -698,6 +731,9 @@ export function attention(board: RoadmapBoard): {
     blocked: all.filter(s => s.status === 'blocked' && !s.backlog),
     failed: all.filter(s => s.status === 'failed' && !s.backlog),
     stale: all.filter(s => s.stale && !s.backlog),
+    // Free to start since the last day: the last step it waited on closed (a checkpoint in another track,
+    // say), and nobody may have noticed.
+    unblocked: all.filter(s => s.status === 'todo' && !s.backlog && s.unblockedAt !== undefined && board.at - s.unblockedAt < 86_400_000),
   }
 }
 
@@ -1403,6 +1439,12 @@ export function brief(board: RoadmapBoard, track: string, id: string, me?: strin
       : '',
     s.evidence ? `Last evidence: ${s.evidence}` : '',
     s.note ? `Last note: ${s.note}` : '',
+    (s.history?.length ?? 0) > 1
+      ? `History of evidence and notes, newest first:\n${[...s.history!]
+          .reverse()
+          .map(h => `  ${new Date(h.at).toISOString().slice(0, 16).replace('T', ' ')} ${h.by}${h.status ? ` (${h.status})` : ' (note)'}: ${[h.evidence, h.note].filter(Boolean).join(' — ')}`)
+          .join('\n')}`
+      : '',
     s.lastBy && s.lastAt ? `Last moved by: ${s.lastBy}` : '',
     ...board.sessions
       .filter(x => x.isLive && x.id !== me && x.focus === `${track}/${id}`)

@@ -925,6 +925,16 @@ export const register: Register = on => {
               properties: {
                 title: { type: 'string' },
                 priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+                review: {
+                  type: 'object',
+                  description: 'Its review policy; absent, any review will do (not the track\'s).',
+                  properties: {
+                    required: { type: 'boolean' },
+                    independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+                    mode: { type: 'string', enum: ['standard', 'adversarial'] },
+                  },
+                  required: ['required'],
+                },
               },
               required: ['title'],
             },
@@ -939,7 +949,9 @@ export const register: Register = on => {
       description:
         'Report a roadmap step\'s status: todo, running, done, failed or blocked. `step` is "<track>/<id>" ' +
         '(or "<id>" for this session\'s track). Mark running when you start, done when finished and verified, ' +
-        'with `evidence` (tests passed, commit, PR). You report; the person closes: done on a checkpoint step, ' +
+        'with `evidence` (tests passed, commit, PR). `evidence` or `note` with no status adds to the step\'s ' +
+        'history and changes nothing else — not its status, not its review (e.g. the PR merged after review). ' +
+        'You report; the person closes: done on a checkpoint step, ' +
         'or after failed, becomes "awaiting" the person\'s confirmation in the Roadmap pane. Agent-linked steps ' +
         '("#<track>/<id>" in the Agent description) report themselves. You may also propose `priority` ' +
         '(P0 most urgent … P3, or "none") or `backlog` (true sets a step aside, false brings it back); the ' +
@@ -1069,6 +1081,16 @@ export const register: Register = on => {
               properties: {
                 title: { type: 'string' },
                 priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+                review: {
+                  type: 'object',
+                  description: 'Its review policy; absent, any review will do (not the track\'s).',
+                  properties: {
+                    required: { type: 'boolean' },
+                    independence: { type: 'string', enum: ['any', 'other-session', 'cross-model'] },
+                    mode: { type: 'string', enum: ['standard', 'adversarial'] },
+                  },
+                  required: ['required'],
+                },
               },
               required: ['title'],
             },

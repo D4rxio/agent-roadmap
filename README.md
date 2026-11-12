@@ -130,6 +130,8 @@ or let it read and update one as it works. The pane opens on its own in the desk
   **Confirm / Reject** — also in a track set aside in the backlog, since such a step can still hold up
   work elsewhere; failed steps; and steps left running with nobody on them (**◌ stale**). A step's own
   **⋯** offers the same: **Confirm move → <target>** or **Confirm skip**, with the reason, and **Reject**.
+  **▸ Unblocked today** lists steps that became free to start in the last day — the last step they waited
+  on closed, perhaps in another track — so a stage that may begin is not missed.
 - **Working now.** Live sessions and subagents and what each one is doing this moment.
 - **↻ Roadmap updated.** A chat keeps the plugin code it started with. When the plugin's files on disk
   change (a working copy, or a folder in `CLAUDE_CODE_PLUGIN_DIRS`), the pane and the band say so, with a
@@ -183,7 +185,7 @@ when Codex finished, so it never counts for work reported done after it, and it 
 | `roadmap add` | add one step to a track that exists, with its brief, dependencies and review policy; nothing else in the track changes |
 | `roadmap edit` | change one step's title or brief (why, scope, done when, what it waits on) without re-laying its track; raise its review policy (only you lower it) |
 | `roadmap step` | read one step's brief before working on it |
-| `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); propose a priority or backlog (`<track>/*` for a whole track) |
+| `roadmap mark` | report a status with evidence (`skipped` needs a reason; `moved` needs a target step and a reason); evidence or a note alone adds to the step's dated history and changes nothing else; propose a priority or backlog (`<track>/*` for a whole track) |
 | `roadmap done` | close a step: what shipped, evidence, follow-ups (filed in the backlog) |
 | `roadmap review` | record a review of a step's work: pass, findings or fail, with evidence and what the reviewer did (mode, fresh, tests run) |
 | `roadmap status` | read this project's open steps (`all` for every project) and who is working on what |

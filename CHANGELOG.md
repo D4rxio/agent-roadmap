@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Evidence or a note with no status** (`mark <ref> --evidence …` / `--note …`): it joins the step's
+  history and changes nothing else — status, review and whether the review counts stay as they are — so a
+  PR merged after review is recorded without reporting done again. Evidence is now a dated list, never
+  overwritten: the brief lists it newest first, Needs you shows the latest with "+N earlier".
+- **▸ Unblocked today** in Needs you: steps free to start since the last step they waited on closed, in
+  the last day — a checkpoint in another track included.
 - **A step's review policy is yours to set, and a lowering stays visible.** ⋯ → **⚖ Review** picks another
   model, a fresh chat, any or none, adversarial on or off. Raising saves at once; lowering asks why, and the
   step shows **⚖↓** (from, to, reason, date) for as long as it stands — its track counts them — so a month
@@ -26,6 +32,9 @@ versions follow [Semantic Versioning](https://semver.org/).
   and `/roadmap show` now redraw open panes too, and a pane that cannot draw points to it.
 
 ### Fixed
+- **Follow-ups inherited the track's review policy** — a four-line test fix under a cross-model,
+  adversarial review the person had to close by hand. A follow-up now takes any review unless the writer
+  names one (`review` on a follow-up); raising it later is explicit.
 - **Reviews refused because the work was not reported done.** Implementers were told to report done after
   the push, while the review comes before it. The refusal now tells the reviewer to ask the implementer for
   `done` (saying it waits for review), and a step that needs a review tells its implementer, in its brief

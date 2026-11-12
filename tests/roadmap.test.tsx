@@ -3450,3 +3450,42 @@ test('the pane sets a step\'s review policy: raising saves at once, lowering ask
   expect(files.size).toBe(count)
   await ui.unmount()
 })
+
+test('evidence or a note with no status joins the history and changes neither status nor review; follow-ups take any review; a freed step shows', () => {
+  const cm = { required: true, independence: 'cross-model', mode: 'adversarial' }
+  const events: RoadmapEvent[] = [
+    { kind: 'plan', at: 1000, session: 's', track: 'f', review: cm as never, phases: [{ name: 'P', steps: [{ id: 'G-1b', title: 'Gate' }] }] },
+    { kind: 'plan', at: 1001, session: 's', track: 'p2', review: { required: false }, phases: [{ name: 'P', steps: [{ id: 'SSW', title: 'Stage two', checkpoint: true, blockedBy: ['f/G-1b'] }] }] },
+    { kind: 'step', at: 1100, session: 'impl', track: 'f', id: 'G-1b', status: 'done', evidence: 'Push and PR wait for GO', actor: 'claude', origin: 'agent' },
+    { kind: 'review', at: 1200, session: 'cx', track: 'f', id: 'G-1b', actor: 'codex', verdict: 'pass', via: 'process' },
+    { kind: 'step', at: 1300, session: 'pane', track: 'f', id: 'G-1b', status: 'done', origin: 'person', actor: 'person' },
+  ]
+  const ctx = { events, lives: [], now: 90_000_000, session: 'c', actor: 'claude' }
+  const g = (evs: RoadmapEvent[]) => fold(evs, [], 90_000_100).tracks.find(t => t.name === 'f')!.steps[0]!
+  const before = g(events)
+  const r = markAction(ctx, { step: 'f/G-1b', evidence: 'PR #671 merged as f8e9fb220' })
+  expect(r.ok).toBe(true)
+  expect(r.text).toContain('evidence added to its history (2 entries); status done and its review are unchanged')
+  expect(r.emit.map(e => e.kind)).toEqual(['note'])
+  const s = g([...events, ...r.emit])
+  expect([s.status, s.reviewState, s.reportedAt, s.lastAt]).toEqual([before.status, before.reviewState, before.reportedAt, before.lastAt])
+  expect(s.evidence).toBe('PR #671 merged as f8e9fb220')
+  expect(s.history?.map(h => [h.status, h.evidence])).toEqual([['done', 'Push and PR wait for GO'], [undefined, 'PR #671 merged as f8e9fb220']])
+  const text = brief(fold([...events, ...r.emit], [], 90_000_100), 'f', 'G-1b')!
+  expect(text).toContain('History of evidence and notes, newest first:')
+  expect(text).toMatch(/\(note\): PR #671 merged as f8e9fb220\n.*\(done\): Push and PR wait for GO/)
+  // Nothing at all is still refused; a whole track takes no evidence.
+  expect(markAction(ctx, { step: 'f/G-1b' }).ok).toBe(false)
+  expect(markAction(ctx, { step: 'f/*', note: 'x' }).text).toContain('go on a step')
+
+  // Follow-ups take any review unless they name one, not the track's cross-model.
+  const d = doneAction({ ...ctx, events: events.slice(0, 2) }, { step: 'f/G-1b', shipped: 'x', follow_ups: [{ title: 'A test' }, { title: 'Hard', review: cm }] })
+  const ups = fold([...events.slice(0, 2), ...d.emit], [], 90_000_100).tracks.find(t => t.name === 'f')!.steps.filter(x => x.id !== 'G-1b')
+  expect(ups.map(x => x.review?.independence)).toEqual(['any', 'cross-model'])
+
+  // The checkpoint waiting on G-1b became free when it closed: shown as unblocked within a day, not after.
+  const free = fold(events, [], 1300 + 3_600_000)
+  expect(attention(free).unblocked.map(x => `${x.track}/${x.id}`)).toEqual(['p2/SSW'])
+  expect(free.tracks.find(t => t.name === 'p2')!.steps[0]!.unblockedAt).toBe(1300)
+  expect(attention(fold(events, [], 1300 + 90_000_000)).unblocked).toEqual([])
+})
