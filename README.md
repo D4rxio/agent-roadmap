@@ -11,8 +11,26 @@ Every Claude Code session reads the same state when it starts and writes back wh
 tick off their own steps; you see the whole picture in a side pane. You no longer have to piece together
 what happened across five chats, and a fresh session knows where things stand.
 
-<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: the step this chat holds, a checkpoint awaiting confirmation, tracks with progress bars and priorities, a finished phase folded and open phases listing their steps, hover actions (Done, Copy, Skip, Backlog) on a step, a skipped step with its reason, a step moved to another track, a cross-model review waiting for confirmation, the person's own item, and the sessions and subagents working now"></p>
+<p align="center"><img src="docs/pane.svg" width="720" alt="The Roadmap pane: tabs and projects, the step this chat holds, search, Needs you with a cross-model review to confirm (with what the reviewer declared), a proposed move from a track in the backlog with Confirm move and Reject, and a step unblocked today; an open track whose header counts a lowered review, a step that passed a lowered review with findings not reviewed again, a step's actions open under ⋯ (Done, Priority, Copy, Skip, Review, Backlog), a skipped step, the person's own item, and the sessions and subagents working now"></p>
 <p align="center"><sub>Illustration with sample data.</sub></p>
+
+## What's new in 0.7.0
+
+- **Small corrections without re-laying a track** — `add` puts one step in, `edit` changes one step's
+  brief; `mark --evidence` with no status records later news (a PR merged) without touching status or
+  review, and every piece of evidence is kept with its date.
+- **Review on your terms** — ⋯ → **⚖ Review** sets a step's policy; a lowered one (no Codex at hand, a
+  fresh Claude chat reviews instead) stays marked **⚖↓** with your reason. Reviewers say what they did
+  (adversarial, fresh, tests run); a pass with findings shows its fixes as not reviewed again;
+  follow-ups take any review instead of the track's.
+- **Nothing waiting for you hides** — a proposed move or skip in a backlog track shows in Needs you, with
+  **Confirm move / Confirm skip / Reject**; **▸ Unblocked today** lists steps that just became free.
+- **Projects that make sense** — spare folders and scratchpads never become projects; a track moves to
+  a project in one press; a project can be removed.
+- **A pane that always draws** — long tracks are drawn tighter instead of going blank;
+  `/roadmap refresh` redraws without reloading the plugin.
+
+See [CHANGELOG.md](CHANGELOG.md) for everything.
 
 ## What's new in 0.6.0
 
@@ -86,7 +104,9 @@ or let it read and update one as it works. The pane opens on its own in the desk
   - Hover a step for **⋯**: its actions open in a row under it — **Done ✓** (your word, so it also closes
     a checkpoint), **Priority** (pressed in turn: P3 → P2 → P1 → P0), **Copy** (`#track/id title`, ready
     for a prompt), **Pin** (this chat holds it), **Skip** (with a reason: it will not be done), **Backlog**
-    (set it aside), and on your own items **✎** (rename) and **✕** (remove).
+    (set it aside), **⚖ Review** (its review policy: raise it, or lower it with a reason), and on your
+    own items **✎** (rename) and **✕** (remove). A step awaiting a proposed move or skip offers
+    **Confirm move → <target>** or **Confirm skip** and **Reject** instead of Done ✓.
   - Click a phase's header to open or close it; phases with work left start open, finished ones closed.
   - A pane too big for the engine to draw is drawn tighter: long lists show their first steps and
     "… N more" (the search finds the rest).
